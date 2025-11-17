@@ -1,0 +1,363 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.initializeSocketIO = initializeSocketIO;
+exports.emitNewMessage = emitNewMessage;
+exports.emitChatUpdate = emitChatUpdate;
+exports.emitChatPresence = emitChatPresence;
+exports.emitMessageUpdate = emitMessageUpdate;
+const socket_io_1 = require("socket.io");
+const process_1 = __importDefault(require("process"));
+const MessageSender_1 = __importDefault(require("./Routers/MessageSender"));
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
+const stream_1 = __importDefault(require("stream"));
+const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
+const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
+// Set ffmpeg path
+if (ffmpeg_static_1.default) {
+    fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
+}
+const messageSender = (0, MessageSender_1.default)();
+// Global io instance to be used across the application
+let globalIO = null;
+// Function to initialize Socket.IO
+function initializeSocketIO(server) {
+    const io = new socket_io_1.Server(server, {
+        cors: {
+            origin: [
+                process_1.default.env.FRONTEND_URL || 'http://localhost:3000',
+                'http://localhost:8080' // Allow Keycloak server
+            ],
+            methods: ["GET", "POST"],
+            allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+            credentials: true
+        }
+    });
+    // Store global reference
+    globalIO = io;
+    // Socket.IO connection handling
+    const connectedUsers = new Map();
+    io.on('connection', (socket) => {
+        console.log('User connected:', socket.id);
+        socket.on('join', (userId) => {
+            connectedUsers.set(userId, socket.id);
+            socket.userId = userId;
+            console.log(`User ${userId} joined`);
+        });
+        socket.on('join_conversation', (conversationId) => {
+            socket.join(`conversation_${conversationId}`);
+            console.log(`User ${socket.userId} joined conversation ${conversationId}`);
+        });
+        socket.on('leave_conversation', (conversationId) => {
+            socket.leave(`conversation_${conversationId}`);
+            console.log(`User ${socket.userId} left conversation ${conversationId}`);
+        });
+        socket.on('send_message', async (message) => {
+            try {
+                console.log('Received message via Socket.IO:', message);
+                // Send message via WuzAPI (MessageSender handles DB insertion and socket emits)
+                const currentUser = {
+                    id: socket.userId || 'unknown',
+                    username: socket.userId || 'unknown',
+                    email: undefined
+                };
+                const result = await (await messageSender).sendMessage(message, currentUser);
+                if (!result.success) {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to send message',
+                        originalMessage: message
+                    });
+                    return;
+                }
+                // MessageSender already handled DB insertion and socket emits
+                socket.emit('message_sent', {
+                    success: true,
+                    messageId: result.messageId,
+                    originalMessage: message
+                });
+            }
+            catch (error) {
+                console.error('Error sending message:', error);
+                socket.emit('message_error', {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Internal server error',
+                    originalMessage: message
+                });
+            }
+        });
+        socket.on('send_image', async (data) => {
+            const fs = require('fs');
+            const path = require('path');
+            const tempPath = path.join('imgs', data.filename);
+            try {
+                console.log('Received image via Socket.IO:', data.message);
+                const buffer = Buffer.from(data.imageData, 'base64');
+                fs.writeFileSync(tempPath, buffer);
+                const mockFile = {
+                    path: tempPath,
+                    filename: data.filename,
+                    mimetype: 'image/jpeg'
+                };
+                // Send image via MessageSender (handles DB insertion and socket emits)
+                const currentUser = {
+                    id: socket.userId || 'unknown',
+                    username: socket.userId || 'unknown',
+                    email: undefined
+                };
+                const result = await (await messageSender).sendImage(data.message, mockFile, currentUser);
+                if (!result.success) {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to send image',
+                        originalMessage: data.message
+                    });
+                    return;
+                }
+                // MessageSender already handled DB insertion and socket emits
+                socket.emit('message_sent', {
+                    success: true,
+                    messageId: result.messageId,
+                    originalMessage: data.message
+                });
+            }
+            catch (error) {
+                console.error('Error handling send_image:', error);
+                socket.emit('message_error', {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Internal server error',
+                    originalMessage: data?.message
+                });
+            }
+            finally {
+                // Clean up temp file
+                try {
+                    if (fs.existsSync(tempPath))
+                        fs.unlinkSync(tempPath);
+                }
+                catch (_) { }
+            }
+        });
+        socket.on('send_video', async (data) => {
+            const tempPath = path_1.default.join('Video', data.filename);
+            try {
+                console.log('Received video via Socket.IO:', data.message);
+                const buffer = Buffer.from(data.videoData, 'base64');
+                fs_1.default.writeFileSync(tempPath, buffer);
+                const mockFile = { path: tempPath, filename: data.filename, mimetype: 'video/mp4' };
+                // Send video via MessageSender (handles DB insertion and socket emits)
+                const currentUser = {
+                    id: socket.userId || 'unknown',
+                    username: socket.userId || 'unknown',
+                    email: undefined
+                };
+                const result = await (await messageSender).sendVideo(data.message, mockFile, currentUser);
+                if (!result.success) {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to send video',
+                        originalMessage: data.message
+                    });
+                    return;
+                }
+                // MessageSender already handled DB insertion and socket emits
+                socket.emit('message_sent', {
+                    success: true,
+                    messageId: result.messageId,
+                    originalMessage: data.message
+                });
+            }
+            catch (error) {
+                console.error('Error handling send_video:', error);
+                socket.emit('message_error', {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Internal server error',
+                    originalMessage: data?.message
+                });
+            }
+            finally {
+                // Clean up temp file
+                try {
+                    if (fs_1.default.existsSync(tempPath))
+                        fs_1.default.unlinkSync(tempPath);
+                }
+                catch (_) { }
+            }
+        });
+        socket.on('send_audio', async (data) => {
+            const tempDir = 'Audio';
+            const baseName = path_1.default.basename(data.filename, path_1.default.extname(data.filename));
+            const outputOggPath = path_1.default.join(tempDir, `${baseName}.ogg`);
+            try {
+                console.log('🎤 Received audio message:', data.message);
+                // Ensure output directory exists
+                if (!fs_1.default.existsSync(tempDir)) {
+                    fs_1.default.mkdirSync(tempDir, { recursive: true });
+                }
+                // Convert base64 to readable stream
+                const inputBuffer = Buffer.from(data.audioData, 'base64');
+                const inputStream = new stream_1.default.PassThrough();
+                inputStream.end(inputBuffer);
+                // Output file stream
+                const outputStream = fs_1.default.createWriteStream(outputOggPath);
+                // Convert directly from memory → OGG (no temp .webm file)
+                console.log(`🎧 Converting in memory → ${outputOggPath}`);
+                await new Promise((resolve, reject) => {
+                    (0, fluent_ffmpeg_1.default)(inputStream)
+                        .inputFormat('webm') // input likely from browser recorder
+                        .noVideo()
+                        .audioCodec('libopus')
+                        .format('ogg')
+                        .on('end', () => resolve())
+                        .on('error', reject)
+                        .pipe(outputStream, { end: true });
+                });
+                console.log(`✅ Saved converted OGG file: ${outputOggPath}`);
+                // Prepare mock file for your message sender
+                const mockFile = {
+                    path: outputOggPath,
+                    filename: `${baseName}.ogg`,
+                    mimetype: 'audio/ogg',
+                };
+                const currentUser = {
+                    id: socket.userId || 'unknown',
+                    username: socket.userId || 'unknown',
+                    email: undefined,
+                };
+                // Send audio via MessageSender (handles WuzAPI, DB insertion, and socket emits)
+                const result = await (await messageSender).sendAudio(data.message, mockFile, currentUser);
+                if (!result.success) {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to send audio',
+                        originalMessage: data.message,
+                    });
+                    return;
+                }
+                // MessageSender already handled WuzAPI send, DB insertion, and socket emits
+                socket.emit('message_sent', {
+                    success: true,
+                    messageId: result.messageId,
+                    originalMessage: data.message
+                });
+            }
+            catch (error) {
+                console.error('❌ Error handling send_audio:', error);
+                socket.emit('message_error', {
+                    success: false,
+                    error: error?.message || 'Internal server error',
+                    originalMessage: data?.message,
+                });
+            }
+        });
+        socket.on('cancel_recording', async (data) => {
+            try {
+                console.log('Recording cancelled:', data);
+                // Clean up any temporary files if filename is provided
+                if (data.filename) {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const tempPath = path.join('Audio', data.filename);
+                    if (fs.existsSync(tempPath)) {
+                        fs.unlinkSync(tempPath);
+                        console.log('Cleaned up cancelled recording file:', data.filename);
+                    }
+                }
+                socket.emit('recording_cancelled', {
+                    success: true,
+                    message: 'Recording cancelled successfully'
+                });
+            }
+            catch (error) {
+                console.error('Error cancelling recording:', error);
+                socket.emit('recording_cancelled', {
+                    success: false,
+                    error: 'Failed to cancel recording'
+                });
+            }
+        });
+        socket.on('typing', (data) => {
+            const { conversationId, userId, isTyping } = data;
+            // Emit typing status to all users in the conversation except sender
+            socket.to(`conversation_${conversationId}`).emit('user_typing', {
+                userId,
+                isTyping,
+                conversationId
+            });
+        });
+        socket.on('disconnect', () => {
+            if (socket.userId) {
+                connectedUsers.delete(socket.userId);
+                console.log(`User ${socket.userId} disconnected`);
+            }
+        });
+    });
+    return io;
+}
+// Export functions to emit events from other parts of the application
+function emitNewMessage(messageData) {
+    if (globalIO) {
+        try {
+            if (messageData?.timestamp && messageData.timestamp instanceof Date) {
+                messageData.timestamp = messageData.timestamp.toISOString();
+            }
+            else if (messageData?.timestamp && typeof messageData.timestamp === 'number') {
+                messageData.timestamp = new Date(messageData.timestamp).toISOString();
+            }
+        }
+        catch (e) { }
+        globalIO.to(`conversation_${messageData.chatId}`).emit('new_message', messageData);
+    }
+}
+function emitChatUpdate(chatData) {
+    if (globalIO) {
+        try {
+            if (chatData?.lastMessageTime && chatData.lastMessageTime instanceof Date) {
+                chatData.lastMessageTime = chatData.lastMessageTime.toISOString();
+            }
+            else if (chatData?.lastMessageTime && typeof chatData.lastMessageTime === 'number') {
+                chatData.lastMessageTime = new Date(chatData.lastMessageTime).toISOString();
+            }
+        }
+        catch (e) { }
+        globalIO.emit('chat_updated', {
+            id: chatData.id,
+            name: chatData.name,
+            lastMessage: chatData.lastMessage,
+            lastMessageTime: chatData.lastMessageTime,
+            unreadCount: chatData.unreadCount !== undefined ? chatData.unreadCount : (chatData.unReadCount !== undefined ? chatData.unReadCount : 0),
+            isTyping: false,
+            isOnline: true,
+            phone: chatData.phone,
+            contactId: chatData.contactId
+        });
+    }
+}
+function emitChatPresence(presenceData) {
+    if (globalIO) {
+        globalIO.to(`conversation_${presenceData.chatId}`).emit('chat_presence', {
+            chatId: presenceData.chatId,
+            userId: presenceData.userId,
+            isOnline: presenceData.isOnline,
+            isTyping: presenceData.isTyping
+        });
+    }
+}
+// Export function to emit message update events (for replacing temp messages)
+function emitMessageUpdate(messageData) {
+    if (globalIO) {
+        try {
+            if (messageData?.timestamp && messageData.timestamp instanceof Date) {
+                messageData.timestamp = messageData.timestamp.toISOString();
+            }
+            else if (messageData?.timestamp && typeof messageData.timestamp === 'number') {
+                messageData.timestamp = new Date(messageData.timestamp).toISOString();
+            }
+        }
+        catch (e) { }
+        globalIO.to(`conversation_${messageData.chatId}`).emit('message_updated', messageData);
+    }
+}
