@@ -23,3 +23,4 @@ COMMENT ON COLUMN messages."mediaPath" IS 'File path for media messages (audio, 
 
 
 
+
