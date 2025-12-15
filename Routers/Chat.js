@@ -8,8 +8,8 @@ const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const MessageSender_1 = __importDefault(require("./MessageSender"));
-const process_1 = require("process");
 const SocketEmits_1 = require("../SocketEmits");
+const timezone_1 = require("../utils/timezone");
 const router = (0, express_1.Router)();
 // Configure multer for file uploads
 const storage = multer_1.default.diskStorage({
@@ -95,13 +95,13 @@ router.get('/api/GetChatsPage', async (req, res) => {
 });
 // Small helper to call Wuz API endpoints; assumes WUZAPI and WUZAPI_Token env vars
 async function callWuz(path, method = 'GET', body) {
-    const base = (process_1.env.WUZAPI || '').replace(/\/$/, '');
+    const base = (process.env.WUZAPI || '').replace(/\/$/, '');
     if (!base)
         throw new Error('WUZAPI env not configured');
     const url = `${base}/${path.replace(/^\//, '')}`;
     const headers = { 'Content-Type': 'application/json' };
-    if (process_1.env.WUZAPI_Token)
-        headers.token = process_1.env.WUZAPI_Token;
+    if (process.env.WUZAPI_Token)
+        headers.token = process.env.WUZAPI_Token;
     const resp = await fetch(url, {
         method,
         headers,
@@ -392,7 +392,7 @@ router.post('/api/AssignTagToChat', async (req, res) => {
             return res.status(409).json({ error: 'Tag already assigned to this chat' });
         }
         // Insert new chat tag assignment
-        const result = await DBConnection_1.default.query('INSERT INTO public."chatTags" ("tagId", "chatId", "createdBy","creationDate") VALUES ($1, $2, $3, $4) RETURNING *', [tagId, chatId, createdBy, new Date()]);
+        const result = await DBConnection_1.default.query('INSERT INTO public."chatTags" ("tagId", "chatId", "createdBy","creationDate") VALUES ($1, $2, $3, $4) RETURNING *', [tagId, chatId, createdBy, (0, timezone_1.adjustToConfiguredTimezone)(new Date())]);
         res.status(201).json(result.rows[0]);
     }
     catch (error) {
@@ -450,23 +450,23 @@ router.get('/api/GetChatsWithTags', async (req, res) => {
 // Forward message endpoint
 router.post('/api/ForwardMessage', async (req, res) => {
     try {
-        const { originalMessage, targetChatId, userId } = req.body;
-        if (!originalMessage || !targetChatId || !userId) {
+        const { originalMessage, targetChatId, senderId } = req.body;
+        if (!originalMessage || !targetChatId || !senderId) {
             return res.status(400).json({ error: 'originalMessage, targetChatId, and userId are required' });
         }
         // Build forwarded message payload
         const forwardedMessage = {
             id: Date.now().toString(),
             chatId: targetChatId,
-            message: `Forwarded: ${originalMessage.message}`,
-            timestamp: new Date(),
-            ContactId: userId,
+            message: originalMessage.message,
+            timestamp: (0, timezone_1.adjustToConfiguredTimezone)(new Date()),
+            ContactId: originalMessage.senderId,
             messageType: originalMessage.messageType || 'text',
             isEdit: false,
             isRead: false,
             isDelivered: false,
             isFromMe: true,
-            phone: targetChatId
+            phone: originalMessage.phone
         };
         // Use the centralized MessageSender to actually send the forwarded message
         const messageSender = await (0, MessageSender_1.default)();
@@ -561,7 +561,7 @@ router.post('/api/AssignChat', async (req, res) => {
         if (!chatId || !assignedTo || !assignedBy) {
             return res.status(400).json({ error: 'chatId, assignedTo, and assignedBy are required' });
         }
-        const assignedAt = new Date().toISOString(); // Use toISOString() instead of toUTCString()
+        const assignedAt = (0, timezone_1.adjustToConfiguredTimezone)(new Date()).toISOString(); // Use toISOString() instead of toUTCString()
         // Assign the chat
         await DBConnection_1.default.query(`
       INSERT INTO "chatAssignmentDetail" ("chatId", "assignedTo", "assignedBy", "assignedAt") 
@@ -1102,8 +1102,8 @@ router.put('/api/UpdateChatStatus/:chatId', async (req, res) => {
         const result = await DBConnection_1.default.query(`
       UPDATE chats 
       SET status = $1, 
-          closeReason = $2,
-          closedAt = CASE WHEN $1 = 'closed' THEN NOW() ELSE NULL END
+          "closeReason" = $2,
+          "closedAt" = CASE WHEN $1 = 'closed' THEN NOW() ELSE NULL END
       WHERE Id = $3
       RETURNING *
     `, [status, reason || null, chatId]);

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../DBConnection';
+import { adjustToConfiguredTimezone } from '../utils/timezone';
 
 const router = Router();
 
@@ -9,9 +10,9 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
     const { timeRange = 'today', field = 'general' } = req.query;
 
     // Calculate date range
-    const now = new Date();
-    let startDate = new Date();
-    
+    const now = adjustToConfiguredTimezone(new Date());
+    let startDate = adjustToConfiguredTimezone(new Date());
+
     switch (timeRange) {
       case 'today':
         startDate.setHours(0, 0, 0, 0);
@@ -92,7 +93,7 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
       unassigned: parseInt(realTimeResult.rows[0]?.unassignedChats || '0'),
       followUp: parseInt(realTimeResult.rows[0]?.followUpChats || '0'),
       done: parseInt(realTimeResult.rows[0]?.resolvedChats || '0'),
-      
+
       // All-time metrics
       allInstances: parseInt(realTimeResult.rows[0]?.allChats || '0'),
       allUsers: parseInt(usersResult.rows[0]?.users || '0'),
@@ -102,7 +103,7 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
       allSpeedFiles: 0,
       allBroadcasts: 0,
       allBulks: 0,
-      
+
       // Chart data
       messagesData: {
         incoming: parseInt(messagesResult.rows[0]?.incoming || '0'),
@@ -123,7 +124,7 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
         sent: 0,
         pending: 0
       },
-      
+
       fieldType: field
     };
 

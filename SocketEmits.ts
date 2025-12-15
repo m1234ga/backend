@@ -1,7 +1,7 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import process from 'process'
-import messageSenderRouter from './Routers/MessageSender';  
+import messageSenderRouter from './Routers/MessageSender';
 import { Chat, ChatMessage } from '../Shared/Models';
 import pool from './DBConnection';
 import path from 'path';
@@ -9,13 +9,14 @@ import fs from 'fs';
 import stream from 'stream';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import { adjustToConfiguredTimezone } from './utils/timezone';
 
 // Set ffmpeg path
 if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic);
 }
 
-const messageSender=messageSenderRouter();
+const messageSender = messageSenderRouter();
 // Define interfaces for better type safety
 interface MessageData {
   conversationId: string;
@@ -137,7 +138,7 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
       const fs = require('fs');
       const path = require('path');
       const tempPath = path.join('imgs', data.filename);
-      
+
       try {
         console.log('Received image via Socket.IO:', data.message);
 
@@ -159,39 +160,39 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         const result = await (await messageSender).sendImage(data.message, mockFile, currentUser);
 
         if (!result.success) {
-          socket.emit('message_error', { 
-            success: false, 
-            error: result.error || 'Failed to send image', 
-            originalMessage: data.message 
+          socket.emit('message_error', {
+            success: false,
+            error: result.error || 'Failed to send image',
+            originalMessage: data.message
           });
           return;
         }
 
         // MessageSender already handled DB insertion and socket emits
-        socket.emit('message_sent', { 
-          success: true, 
-          messageId: result.messageId, 
-          originalMessage: data.message 
+        socket.emit('message_sent', {
+          success: true,
+          messageId: result.messageId,
+          originalMessage: data.message
         });
       } catch (error) {
         console.error('Error handling send_image:', error);
-        socket.emit('message_error', { 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Internal server error', 
-          originalMessage: data?.message 
+        socket.emit('message_error', {
+          success: false,
+          error: error instanceof Error ? error.message : 'Internal server error',
+          originalMessage: data?.message
         });
       } finally {
         // Clean up temp file
-        try { 
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); 
-        } catch (_) {}
+        try {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        } catch (_) { }
       }
     });
 
     socket.on('send_video', async (data: { message: ChatMessage, videoData: string, filename: string }) => {
 
       const tempPath = path.join('Video', data.filename);
-      
+
       try {
         console.log('Received video via Socket.IO:', data.message);
 
@@ -209,32 +210,32 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         const result = await (await messageSender).sendVideo(data.message, mockFile, currentUser);
 
         if (!result.success) {
-          socket.emit('message_error', { 
-            success: false, 
-            error: result.error || 'Failed to send video', 
-            originalMessage: data.message 
+          socket.emit('message_error', {
+            success: false,
+            error: result.error || 'Failed to send video',
+            originalMessage: data.message
           });
           return;
         }
 
         // MessageSender already handled DB insertion and socket emits
-        socket.emit('message_sent', { 
-          success: true, 
-          messageId: result.messageId, 
-          originalMessage: data.message 
+        socket.emit('message_sent', {
+          success: true,
+          messageId: result.messageId,
+          originalMessage: data.message
         });
       } catch (error) {
         console.error('Error handling send_video:', error);
-        socket.emit('message_error', { 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Internal server error', 
-          originalMessage: data?.message 
+        socket.emit('message_error', {
+          success: false,
+          error: error instanceof Error ? error.message : 'Internal server error',
+          originalMessage: data?.message
         });
       } finally {
         // Clean up temp file
-        try { 
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); 
-        } catch (_) {}
+        try {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        } catch (_) { }
       }
     });
     socket.on(
@@ -243,23 +244,23 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         const tempDir = 'Audio';
         const baseName = path.basename(data.filename, path.extname(data.filename));
         const outputOggPath = path.join(tempDir, `${baseName}.ogg`);
-    
+
         try {
           console.log('🎤 Received audio message:', data.message);
-    
+
           // Ensure output directory exists
           if (!fs.existsSync(tempDir)) {
             fs.mkdirSync(tempDir, { recursive: true });
           }
-    
+
           // Convert base64 to readable stream
           const inputBuffer = Buffer.from(data.audioData, 'base64');
           const inputStream = new stream.PassThrough();
           inputStream.end(inputBuffer);
-    
+
           // Output file stream
           const outputStream = fs.createWriteStream(outputOggPath);
-    
+
           // Convert directly from memory → OGG (no temp .webm file)
           console.log(`🎧 Converting in memory → ${outputOggPath}`);
           await new Promise<void>((resolve, reject) => {
@@ -272,25 +273,25 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
               .on('error', reject)
               .pipe(outputStream, { end: true });
           });
-    
+
           console.log(`✅ Saved converted OGG file: ${outputOggPath}`);
-    
+
           // Prepare mock file for your message sender
           const mockFile = {
             path: outputOggPath,
             filename: `${baseName}.ogg`,
             mimetype: 'audio/ogg',
           };
-    
+
           const currentUser = {
             id: socket.userId || 'unknown',
             username: socket.userId || 'unknown',
             email: undefined,
           };
-    
+
           // Send audio via MessageSender (handles WuzAPI, DB insertion, and socket emits)
           const result = await (await messageSender).sendAudio(data.message, mockFile, currentUser);
-    
+
           if (!result.success) {
             socket.emit('message_error', {
               success: false,
@@ -299,7 +300,7 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
             });
             return;
           }
-    
+
           // MessageSender already handled WuzAPI send, DB insertion, and socket emits
           socket.emit('message_sent', {
             success: true,
@@ -320,24 +321,24 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
     socket.on('cancel_recording', async (data: { filename?: string }) => {
       try {
         console.log('Recording cancelled:', data);
-        
+
         // Clean up any temporary files if filename is provided
         if (data.filename) {
           const fs = require('fs');
           const path = require('path');
           const tempPath = path.join('Audio', data.filename);
-          
+
           if (fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);
             console.log('Cleaned up cancelled recording file:', data.filename);
           }
         }
-        
+
         socket.emit('recording_cancelled', {
           success: true,
           message: 'Recording cancelled successfully'
         });
-        
+
       } catch (error) {
         console.error('Error cancelling recording:', error);
         socket.emit('recording_cancelled', {
@@ -349,12 +350,12 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
     socket.on('typing', (data: TypingData) => {
       const { conversationId, userId, isTyping } = data;
-      
+
       // Emit typing status to all users in the conversation except sender
-      socket.to(`conversation_${conversationId}`).emit('user_typing', { 
-        userId, 
+      socket.to(`conversation_${conversationId}`).emit('user_typing', {
+        userId,
         isTyping,
-        conversationId 
+        conversationId
       });
     });
 
@@ -378,6 +379,8 @@ export function emitNewMessage(messageData: any) {
         if (messageData.timestamp instanceof Date) {
           messageData.timestamp = messageData.timestamp.toISOString();
         } else if (typeof messageData.timestamp === 'number') {
+          // Assume number is absolute timestamp, check if it needs adjustment?
+          // Usually messageData comes from DB or Sender, so it's already adjusted or is a date.
           messageData.timestamp = new Date(messageData.timestamp).toISOString();
         } else if (typeof messageData.timestamp === 'string') {
           // Already a string, ensure it's ISO format
@@ -394,7 +397,7 @@ export function emitNewMessage(messageData: any) {
         } else if (typeof messageData.timeStamp === 'string') {
           timeStampValue = new Date(messageData.timeStamp);
         } else {
-          timeStampValue = new Date();
+          timeStampValue = adjustToConfiguredTimezone(new Date());
         }
         // Set both fields for consistency
         messageData.timeStamp = timeStampValue;
@@ -417,7 +420,7 @@ export function emitChatUpdate(chatData: any) {
       } else if ((chatData as any)?.lastMessageTime && typeof (chatData as any).lastMessageTime === 'number') {
         (chatData as any).lastMessageTime = new Date((chatData as any).lastMessageTime).toISOString();
       }
-    } catch (e) {}
+    } catch (e) { }
     globalIO.emit('chat_updated', {
       id: chatData.id,
       name: chatData.name,
@@ -452,7 +455,7 @@ export function emitMessageUpdate(messageData: any) {
       } else if (messageData?.timestamp && typeof messageData.timestamp === 'number') {
         messageData.timestamp = new Date(messageData.timestamp).toISOString();
       }
-    } catch (e) {}
+    } catch (e) { }
     globalIO.to(`conversation_${messageData.chatId}`).emit('message_updated', messageData);
   }
 }

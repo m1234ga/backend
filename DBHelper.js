@@ -21,7 +21,11 @@ async function ensureParticipantsColumn() {
 function DBHelper() {
     async function GetUser(token) {
         const res = await DBConnection_1.default.query("SELECT * FROM USERS WHERE name='" + token + "'");
-        return res.rows[0].jid.split(":")[0];
+        if (res.rows.length === 0) {
+            console.warn(`GetUser: User not found for token/name: ${token}`);
+            return null;
+        }
+        return res.rows[0].jid ? res.rows[0].jid.split(":")[0] : null;
     }
     async function upsertChat(id, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, statusOrOptions) {
         await ensureParticipantsColumn();

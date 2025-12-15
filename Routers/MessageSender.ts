@@ -1,4 +1,4 @@
-import { env } from 'process';
+
 import { v4 as uuidv4 } from 'uuid';
 import { emitChatUpdate, emitNewMessage, emitMessageUpdate } from '../SocketEmits';
 import pool from '../DBConnection';
@@ -9,6 +9,7 @@ import DBHelper from '../DBHelper';
 import ffmpeg from 'fluent-ffmpeg';
 // @ts-ignore - ffmpeg-static may not have proper TS types
 import ffmpegPath from 'ffmpeg-static';
+import { adjustToConfiguredTimezone } from '../utils/timezone';
 
 // Configure ffmpeg binary if available
 try {
@@ -16,16 +17,10 @@ try {
     // @ts-ignore
     ffmpeg.setFfmpegPath(ffmpegPath as string);
   }
-} catch {}
+} catch { }
 
-export default async function MessageSender(){
-  
-  // Helper function to adjust timestamp for Cairo timezone (UTC+2)
-  function adjustToCairoTime(timestamp: Date): Date {
-    const cairoOffset = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
-    return new Date(timestamp.getTime() + cairoOffset);
-  }
-  
+export default async function MessageSender() {
+
   // Helper function to create message object in database format
   function createMessageObject(messageId: string, message: ChatMessage, messageType: string, content: string, timestamp: Date) {
     return {
@@ -46,87 +41,103 @@ export default async function MessageSender(){
     };
   }
 
- async function sendMessage(message:ChatMessage, currentUser?: { id: string, username: string, email?: string }) {
-  try {
+  async function sendMessage(message: ChatMessage, currentUser?: { id: string, username: string, email?: string }) {
+    try {
 
-    if (!message || !message.phone) {
+      if (!message || !message.phone) {
+        return {
+          success: false,
+          error: 'Missing required fields: phone and message are required',
+        };
+      }
+
+      const response = await fetch(process.env.WUZAPI + '/chat/send/text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          token: process.env.WUZAPI_Token || "",
+        },
+        body: JSON.stringify({
+          Phone: message.phone,
+          Body: message.message,
+          Id: uuidv4(),
+          ContextInfo: buildForwardContext(message)
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('WhatsApp API error:', response.status, errorText);
+        return {
+          success: false,
+          error: 'Failed to send message via WhatsApp API',
+          details: errorText,
+        };
+      }
+
+      const result: any = await response.json();
+      const messageId = result.data.Id;
+      let timestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+      timestamp = adjustToConfiguredTimezone(timestamp);
+
+      // Store the temp ID from the original message (sent from frontend)
+      const tempId = message.id;
+
+      // Save message to database
+      const dbMessageObject = createMessageObject(messageId, message, 'text', message.message, timestamp);
+
+      // Save chat to database
+      const chatResult = await DBHelper().upsertChat(
+        message.chatId,
+        message.message,
+        timestamp,
+        0, // unreadCount
+        false, // isOnline
+        false, // isTyping
+        message.pushName ?? "",
+        message.ContactId || message.phone,
+        currentUser?.id || 'current_user' // userId from current user
+      );
+
+      // Save message to database
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'text');
+      if (savedMsg) {
+        emitNewMessage({ ...savedMsg, tempId });
+
+        // Emit update to confirm the message was sent and replace the optimistically added message
+        emitMessageUpdate({
+          id: savedMsg.id,
+          tempId,
+          timestamp: savedMsg.timestamp || timestamp.toISOString(),
+          timeStamp: savedMsg.timeStamp || timestamp,
+          chatId: savedMsg.chatId,
+          messageType: 'text',
+          isDelivered: true,
+          message: savedMsg.message
+        });
+      }
+
+      // Emit socket events - only chat update (message already added optimistically on frontend)
+      if (chatResult && chatResult.length > 0) {
+        emitChatUpdate(chatResult[0]);
+      }
+
+      return {
+        success: true,
+        message: 'Message sent successfully',
+        data: result,
+        messageId
+      };
+    } catch (error) {
+      console.error('Error in sendMessage:', error);
       return {
         success: false,
-        error: 'Missing required fields: phone and message are required',
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error',
       };
     }
-
-    const response = await fetch(env.WUZAPI + '/chat/send/text', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        token: env.WUZAPI_Token||"",
-      },
-      body: JSON.stringify({
-        Phone: message.phone,
-        Body: message.message,
-        Id: uuidv4(),
-        ContextInfo: buildForwardContext(message)
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('WhatsApp API error:', response.status, errorText);
-      return {
-        success: false,
-        error: 'Failed to send message via WhatsApp API',
-        details: errorText,
-      };
-    }
-
-    const result:any = await response.json();
-    const messageId=result.data.Id;
-    let timestamp = new Date(result.data.Timestamp*1000|| result.data.TimeStamp*1000 || Date.now());
-    timestamp=adjustToCairoTime(timestamp);
-    // Save message to database
-    const dbMessageObject = createMessageObject(messageId, message, 'text', message.message, timestamp);
-    
-    // Save chat to database
-    const chatResult = await DBHelper().upsertChat(
-      message.chatId,
-      message.message,
-      timestamp,
-      0, // unreadCount
-      false, // isOnline
-      false, // isTyping
-      message.chatId,
-      message.ContactId || message.phone,
-      currentUser?.id || 'current_user' // userId from current user
-    );
-    
-    // Save message to database
-    const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'text');
-    if (savedMsg) {
-      emitNewMessage(savedMsg);
-    }
-
-    // Emit socket events - only chat update (message already added optimistically on frontend)
-    if (chatResult && chatResult.length > 0) {
-      emitChatUpdate(chatResult[0]);
-    }
-
-    return {
-      success: true,
-      message: 'Message sent successfully',
-      data: result,
-      messageId
-    };
-  } catch (error) {
-    console.error('Error in sendMessage:', error);
-    return {
-      success: false,
-      error: 'Internal server error',
-      details: error instanceof Error ? error.message : 'Unknown error',
-    };
   }
-}
- async function sendImage(message: ChatMessage, imageFile: any, currentUser?: { id: string, username: string, email?: string }) {
+  async function sendImage(message: ChatMessage, imageFile: any, currentUser?: { id: string, username: string, email?: string }) {
     try {
       if (!message || !message.phone || !imageFile) {
         return {
@@ -140,16 +151,16 @@ export default async function MessageSender(){
       const imageBuffer = fs.readFileSync(imageFile.path);
       const base64Image = imageBuffer.toString('base64');
 
-      const response = await fetch(env.WUZAPI + '/chat/send/image', {
+      const response = await fetch(process.env.WUZAPI + '/chat/send/image', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          token:  env.WUZAPI_Token||"",
+          token: process.env.WUZAPI_Token || "",
         },
 
         body: JSON.stringify({
           Phone: message.phone,
-          Image: 'data:image/jpeg;base64,'+base64Image,
+          Image: 'data:image/jpeg;base64,' + base64Image,
           Id: uuidv4(),
           Caption: message.message || '',
           ContextInfo: buildForwardContext(message)
@@ -164,7 +175,7 @@ export default async function MessageSender(){
           if (imageFile?.path && fs.existsSync(imageFile.path)) {
             fs.unlinkSync(imageFile.path);
           }
-        } catch {}
+        } catch { }
         return {
           success: false,
           error: 'Failed to send image via WhatsApp API',
@@ -174,17 +185,17 @@ export default async function MessageSender(){
 
       const result = await response.json();
       const messageId = result.data.Id || uuidv4();
-        const rawTimestamp = new Date(result.data.Timestamp*1000 || result.data.TimeStamp*1000 || Date.now());
-        // Adjust timestamp for Cairo timezone (UTC+2)
-        const timestamp = adjustToCairoTime(rawTimestamp);
-        const isoTimestamp = timestamp.toISOString();
-      
+      const rawTimestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+      // Adjust timestamp for Cairo timezone (UTC+2)
+      const timestamp = adjustToConfiguredTimezone(rawTimestamp);
+      const isoTimestamp = timestamp.toISOString();
+
       // Store the temp ID from the original message (sent from frontend)
       const tempId = message.id;
-      
+
       // Save message to database
       const dbMessageObject = createMessageObject(messageId, message, 'image', message.message || '[Image]', timestamp);
-      
+
       // Save chat to database
       const chatResult = await DBHelper().upsertChat(
         message.chatId,
@@ -193,11 +204,11 @@ export default async function MessageSender(){
         0, // unreadCount
         false, // isOnline
         false, // isTyping
-        message.chatId,
+        message.pushName ?? "",
         message.ContactId || message.phone,
         currentUser?.id || 'current_user' // userId from current user
       );
-      
+
       // Save message to database (don't emit yet - wait for file to be saved)
       await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'image');
 
@@ -231,17 +242,17 @@ export default async function MessageSender(){
           }
         });
         // Remove original file after successful conversion
-        try { fs.unlinkSync(imageFile.path); } catch {}
-        
+        try { fs.unlinkSync(imageFile.path); } catch { }
+
         // Refresh message path in database and emit update with correct mediaPath after file is successfully saved
         const refreshedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'image');
         if (refreshedMsg) {
           // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-          const updatedTimestamp = refreshedMsg.timestamp ? adjustToCairoTime(new Date(refreshedMsg.timestamp)) : timestamp;
+          const updatedTimestamp = refreshedMsg.timestamp ? adjustToConfiguredTimezone(new Date(refreshedMsg.timestamp)) : timestamp;
           // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
           const finalMediaPath = refreshedMsg.mediaPath || `imgs/${messageId}.webp`;
           console.log('Emitting image update:', { id: refreshedMsg.id, tempId, mediaPath: finalMediaPath });
-          emitMessageUpdate({ 
+          emitMessageUpdate({
             id: refreshedMsg.id,
             tempId,
             mediaPath: finalMediaPath,
@@ -257,11 +268,11 @@ export default async function MessageSender(){
         const fallbackMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'image');
         if (fallbackMsg) {
           // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-          const updatedTimestamp = fallbackMsg.timestamp ? adjustToCairoTime(new Date(fallbackMsg.timestamp)) : timestamp;
+          const updatedTimestamp = fallbackMsg.timestamp ? adjustToConfiguredTimezone(new Date(fallbackMsg.timestamp)) : timestamp;
           // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
           const finalMediaPath = fallbackMsg.mediaPath || `imgs/${messageId}.webp`;
           console.log('Emitting image update (fallback):', { id: fallbackMsg.id, tempId, mediaPath: finalMediaPath });
-          emitMessageUpdate({ 
+          emitMessageUpdate({
             id: fallbackMsg.id,
             tempId,
             mediaPath: finalMediaPath,
@@ -276,7 +287,7 @@ export default async function MessageSender(){
           if (imageFile?.path && fs.existsSync(imageFile.path)) {
             fs.unlinkSync(imageFile.path);
           }
-        } catch {}
+        } catch { }
       }
 
       return {
@@ -308,11 +319,11 @@ export default async function MessageSender(){
       const videoBuffer = fs.readFileSync(videoFile.path);
       const base64Video = videoBuffer.toString('base64');
 
-      const response = await fetch(env.WUZAPI + '/chat/send/video', {
+      const response = await fetch(process.env.WUZAPI + '/chat/send/video', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          token:env.WUZAPI_Token||"",
+          token: process.env.WUZAPI_Token || "",
         },
         body: JSON.stringify({
           Phone: message.phone,
@@ -331,7 +342,7 @@ export default async function MessageSender(){
           if (videoFile?.path && fs.existsSync(videoFile.path)) {
             fs.unlinkSync(videoFile.path);
           }
-        } catch {}
+        } catch { }
         return {
           success: false,
           error: 'Failed to send video via WhatsApp API',
@@ -341,14 +352,14 @@ export default async function MessageSender(){
 
       const result = await response.json();
       const messageId = result.data.Id || uuidv4();
-        const rawTimestamp = new Date(result.data.Timestamp*1000 || result.data.TimeStamp*1000 || Date.now());
-        // Adjust timestamp for Cairo timezone (UTC+2)
-        const timestamp = adjustToCairoTime(rawTimestamp);
-        const isoTimestamp = timestamp.toISOString();
-      
+      const rawTimestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+      // Adjust timestamp for Cairo timezone (UTC+2)
+      const timestamp = adjustToConfiguredTimezone(rawTimestamp);
+      const isoTimestamp = timestamp.toISOString();
+
       // Save message to database
       const dbMessageObject = createMessageObject(messageId, message, 'video', message.message || '[Video]', timestamp);
-      
+
       // Save chat to database
       const chatResult = await DBHelper().upsertChat(
         message.chatId,
@@ -357,11 +368,11 @@ export default async function MessageSender(){
         0, // unreadCount
         false, // isOnline
         false, // isTyping
-        message.chatId,
+        message.pushName ?? "",
         message.ContactId || message.phone,
         currentUser?.id || 'current_user' // userId from current user
       );
-      
+
       // Save message to database
       const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'video');
       if (savedMsg) {
@@ -389,7 +400,7 @@ export default async function MessageSender(){
           if (videoFile?.path && fs.existsSync(videoFile.path)) {
             fs.unlinkSync(videoFile.path);
           }
-        } catch {}
+        } catch { }
       }
 
       return {
@@ -450,7 +461,7 @@ export default async function MessageSender(){
       // Read the audio file
       const audioBuffer = fs.readFileSync(audioFile.path);
       console.log(`Audio buffer size: ${audioBuffer.length} bytes`);
-      
+
       if (audioBuffer.length === 0) {
         return {
           success: false,
@@ -462,9 +473,9 @@ export default async function MessageSender(){
       // Convert to base64
       const base64Audio = audioBuffer.toString('base64');
       const mimeType = 'audio/ogg';
-      
+
       console.log(`Base64 audio length: ${base64Audio.length} characters`);
-      
+
       if (base64Audio.length === 0) {
         return {
           success: false,
@@ -483,15 +494,15 @@ export default async function MessageSender(){
         ContextInfo: buildForwardContext(message),
       };
 
-      console.log(`Sending audio to WhatsApp API: ${env.WUZAPI}/chat/send/audio`);
+      console.log(`Sending audio to WhatsApp API: ${process.env.WUZAPI}/chat/send/audio`);
       console.log(`Phone: ${message.phone}`);
       console.log(`Audio size: ${base64Audio.length} characters`);
       console.log(`MIME type: ${mimeType}`);
-      console.log(`WUZAPI URL: ${env.WUZAPI}`);
-      console.log(`WUZAPI Token exists: ${!!env.WUZAPI_Token}`);
+      console.log(`WUZAPI URL: ${process.env.WUZAPI}`);
+      console.log(`WUZAPI Token exists: ${!!process.env.WUZAPI_Token}`);
 
       // Validate environment variables
-      if (!env.WUZAPI) {
+      if (!process.env.WUZAPI) {
         return {
           success: false,
           error: 'WUZAPI environment variable is not set',
@@ -499,7 +510,7 @@ export default async function MessageSender(){
         };
       }
 
-      if (!env.WUZAPI_Token) {
+      if (!process.env.WUZAPI_Token) {
         return {
           success: false,
           error: 'WUZAPI_Token environment variable is not set',
@@ -513,11 +524,11 @@ export default async function MessageSender(){
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-        response = await fetch(env.WUZAPI + '/chat/send/audio', {
+        response = await fetch(process.env.WUZAPI + '/chat/send/audio', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            token: env.WUZAPI_Token || "",
+            token: process.env.WUZAPI_Token || "",
           },
           body: JSON.stringify(payload),
           signal: controller.signal,
@@ -541,7 +552,7 @@ export default async function MessageSender(){
           if (audioFile?.path && fs.existsSync(audioFile.path)) {
             fs.unlinkSync(audioFile.path);
           }
-        } catch {}
+        } catch { }
         return {
           success: false,
           error: 'Failed to send audio via WhatsApp API',
@@ -551,17 +562,17 @@ export default async function MessageSender(){
 
       const result = await response.json();
       const messageId = result.data?.Id || uuidv4();
-        const rawTimestamp = new Date(result.data?.TimeStamp*1000 || result.data?.Timestamp*1000 || Date.now()*1000);
-        // Adjust timestamp for Cairo timezone (UTC+2)
-        const timestamp = adjustToCairoTime(rawTimestamp);
-        const isoTimestamp = timestamp.toISOString();
-      
+      const rawTimestamp = new Date(result.data?.TimeStamp * 1000 || result.data?.Timestamp * 1000 || Date.now() * 1000);
+      // Adjust timestamp for Cairo timezone (UTC+2)
+      const timestamp = adjustToConfiguredTimezone(rawTimestamp);
+      const isoTimestamp = timestamp.toISOString();
+
       // Store the temp ID from the original message (sent from frontend)
       const tempId = message.id;
-      
+
       // Save message to database - keep readable label in message, not filename
       const dbMessageObject = createMessageObject(messageId, message, 'audio', '[Audio]', timestamp);
-      
+
       // Save chat to database
       const chatResult = await DBHelper().upsertChat(
         message.chatId,
@@ -570,11 +581,11 @@ export default async function MessageSender(){
         0, // unreadCount
         false, // isOnline
         false, // isTyping
-        message.chatId,
+        message.pushName ?? "",
         message.ContactId || message.phone,
         currentUser?.id || 'current_user' // userId from current user
       );
-      
+
       // Save message to database (don't emit yet - wait for file to be moved)
       await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'audio');
 
@@ -591,13 +602,13 @@ export default async function MessageSender(){
         }
         const destPath = path.join(targetDir, `${messageId}.ogg`);
         fs.renameSync(audioFile.path, destPath);
-        
+
         // Refresh message path in database and emit update with correct mediaPath after file is successfully moved
         const refreshedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'audio');
         if (refreshedMsg) {
           // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-          const updatedTimestamp = refreshedMsg.timestamp ? adjustToCairoTime(new Date(refreshedMsg.timestamp)) : timestamp;
-          emitMessageUpdate({ 
+          const updatedTimestamp = refreshedMsg.timestamp ? adjustToConfiguredTimezone(new Date(refreshedMsg.timestamp)) : timestamp;
+          emitMessageUpdate({
             id: refreshedMsg.id,
             tempId,
             mediaPath: refreshedMsg.mediaPath,
@@ -613,8 +624,8 @@ export default async function MessageSender(){
         const fallbackMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'audio');
         if (fallbackMsg) {
           // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-          const updatedTimestamp = fallbackMsg.timestamp ? adjustToCairoTime(new Date(fallbackMsg.timestamp)) : timestamp;
-          emitMessageUpdate({ 
+          const updatedTimestamp = fallbackMsg.timestamp ? adjustToConfiguredTimezone(new Date(fallbackMsg.timestamp)) : timestamp;
+          emitMessageUpdate({
             id: fallbackMsg.id,
             tempId,
             mediaPath: fallbackMsg.mediaPath,
@@ -703,12 +714,12 @@ export default async function MessageSender(){
     }
   }
 
-  return{
-sendMessage,
-sendVideo,
-sendImage,
-sendAudio,
-createMessageTemplate
+  return {
+    sendMessage,
+    sendVideo,
+    sendImage,
+    sendAudio,
+    createMessageTemplate
   }
 }
 

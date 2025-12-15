@@ -1,280 +1,264 @@
 import { Router, Request, Response } from 'express';
-import { keycloakAdmin } from '../KeycloakAdminHelper';
+import { v4 as uuidv4 } from 'uuid';
+import pool from '../DBConnection';
+import { hashPassword } from '../src/utils/auth';
 
 const router = Router();
 
-/**
- * Middleware to check if user has admin role
- */
-const requireAdmin = (req: Request, res: Response, next: Function) => {
-  const kauth = (req as any).kauth;
-  
-  if (!kauth || !kauth.grant) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+// Middleware is applied in server.ts (adminMiddleware)
 
-  const token = kauth.grant.access_token;
-  const roles = token?.content?.realm_access?.roles || [];
-  
-  if (!roles.includes('admin') && !roles.includes('user-manager')) {
-    return res.status(403).json({ error: 'Forbidden: Admin access required' });
-  }
-
-  next();
-};
+// Helper to check admin role internally if needed, but adminMiddleware handles it.
 
 /**
  * GET /api/users - Get all users
  */
-router.get('/', requireAdmin, async (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const { search, first, max } = req.query;
-    
-    const users = await keycloakAdmin.getUsers({
-      search: search as string,
-      first: first ? parseInt(first as string) : 0,
-      max: max ? parseInt(max as string) : 100,
-    });
 
-    res.json({ users });
+    let query = 'SELECT id, username, email, first_name as "firstName", last_name as "lastName", role, is_active as enabled FROM app_users';
+    const params: any[] = [];
+
+    if (search) {
+      query += ' WHERE username ILIKE $1 OR email ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1';
+      params.push(`%${search}%`);
+    }
+
+    // Pagination
+    const limit = max ? parseInt(max as string) : 100;
+    const offset = first ? parseInt(first as string) : 0;
+
+    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+
+    // Adapt to Keycloak-like response structure if frontend expects it
+    res.json({ users: result.rows });
   } catch (error: any) {
     console.error('Error fetching users:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch users' });
+    res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
 
 /**
  * GET /api/users/count - Get user count
  */
-router.get('/count', requireAdmin, async (req: Request, res: Response) => {
+router.get('/count', async (req: Request, res: Response) => {
   try {
-    const count = await keycloakAdmin.getUserCount();
-    res.json({ count });
+    const result = await pool.query('SELECT COUNT(*) FROM app_users');
+    res.json({ count: parseInt(result.rows[0].count) });
   } catch (error: any) {
     console.error('Error getting user count:', error);
-    res.status(500).json({ error: error.message || 'Failed to get user count' });
+    res.status(500).json({ error: 'Failed to get user count' });
   }
 });
 
 /**
  * GET /api/users/:userId - Get user by ID
  */
-router.get('/:userId', requireAdmin, async (req: Request, res: Response) => {
+router.get('/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const user = await keycloakAdmin.getUserById(userId);
-    res.json({ user });
+    const result = await pool.query(
+      'SELECT id, username, email, first_name as "firstName", last_name as "lastName", role, is_active as enabled FROM app_users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: result.rows[0] });
   } catch (error: any) {
     console.error('Error fetching user:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch user' });
+    res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
 
 /**
  * POST /api/users - Create a new user
  */
-router.post('/', requireAdmin, async (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
-    const { username, email, firstName, lastName, password, temporary } = req.body;
+    const { username, email, firstName, lastName, password } = req.body;
 
-    if (!username || !email) {
-      return res.status(400).json({ error: 'Username and email are required' });
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email and password are required' });
     }
 
-    const userData: any = {
-      username,
-      email,
-      firstName: firstName || '',
-      lastName: lastName || '',
-      enabled: true,
-      emailVerified: false,
-    };
+    const id = uuidv4();
+    const hashedPassword = await hashPassword(password);
 
-    // Add password if provided
-    if (password) {
-      userData.credentials = [
-        {
-          type: 'password',
-          value: password,
-          temporary: temporary || false,
-        },
-      ];
-    }
+    await pool.query(
+      `INSERT INTO app_users (id, username, email, password_hash, first_name, last_name, role)
+       VALUES ($1, $2, $3, $4, $5, $6, 'user')`,
+      [id, username, email, hashedPassword, firstName || '', lastName || '']
+    );
 
-    const userId = await keycloakAdmin.createUser(userData);
-    
-    res.status(201).json({ 
+    res.status(201).json({
       message: 'User created successfully',
-      userId 
+      userId: id
     });
   } catch (error: any) {
     console.error('Error creating user:', error);
-    res.status(500).json({ error: error.message || 'Failed to create user' });
+    if (error.code === '23505') { // Unique violation
+      return res.status(409).json({ error: 'Username or email already exists' });
+    }
+    res.status(500).json({ error: 'Failed to create user' });
   }
 });
 
 /**
  * PUT /api/users/:userId - Update a user
  */
-router.put('/:userId', requireAdmin, async (req: Request, res: Response) => {
+router.put('/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const { email, firstName, lastName, enabled, emailVerified } = req.body;
+    const { email, firstName, lastName, enabled, role } = req.body; // Added role to update
 
-    const updateData: any = {};
-    
-    if (email !== undefined) updateData.email = email;
-    if (firstName !== undefined) updateData.firstName = firstName;
-    if (lastName !== undefined) updateData.lastName = lastName;
-    if (enabled !== undefined) updateData.enabled = enabled;
-    if (emailVerified !== undefined) updateData.emailVerified = emailVerified;
+    // Build dynamic update query
+    let updates = [];
+    let params = [userId];
+    let idx = 2;
 
-    await keycloakAdmin.updateUser(userId, updateData);
-    
+    if (email !== undefined) { updates.push(`email = $${idx++}`); params.push(email); }
+    if (firstName !== undefined) { updates.push(`first_name = $${idx++}`); params.push(firstName); }
+    if (lastName !== undefined) { updates.push(`last_name = $${idx++}`); params.push(lastName); }
+    if (enabled !== undefined) { updates.push(`is_active = $${idx++}`); params.push(enabled); }
+    if (role !== undefined) { updates.push(`role = $${idx++}`); params.push(role); }
+
+    if (updates.length > 0) {
+      await pool.query(
+        `UPDATE app_users SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        params
+      );
+    }
+
     res.json({ message: 'User updated successfully' });
   } catch (error: any) {
     console.error('Error updating user:', error);
-    res.status(500).json({ error: error.message || 'Failed to update user' });
+    res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
 /**
  * DELETE /api/users/:userId - Delete a user
  */
-router.delete('/:userId', requireAdmin, async (req: Request, res: Response) => {
+router.delete('/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    await keycloakAdmin.deleteUser(userId);
+    await pool.query('DELETE FROM app_users WHERE id = $1', [userId]);
     res.json({ message: 'User deleted successfully' });
   } catch (error: any) {
     console.error('Error deleting user:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete user' });
+    res.status(500).json({ error: 'Failed to delete user' });
   }
 });
 
 /**
  * POST /api/users/:userId/reset-password - Reset user password
  */
-router.post('/:userId/reset-password', requireAdmin, async (req: Request, res: Response) => {
+router.post('/:userId/reset-password', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const { password, temporary } = req.body;
+    const { password } = req.body;
 
     if (!password) {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    await keycloakAdmin.resetPassword(userId, password, temporary || false);
-    
+    const hashedPassword = await hashPassword(password);
+    await pool.query('UPDATE app_users SET password_hash = $1 WHERE id = $2', [hashedPassword, userId]);
+
     res.json({ message: 'Password reset successfully' });
   } catch (error: any) {
     console.error('Error resetting password:', error);
-    res.status(500).json({ error: error.message || 'Failed to reset password' });
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 
 /**
  * GET /api/users/:userId/roles - Get user's roles
  */
-router.get('/:userId/roles', requireAdmin, async (req: Request, res: Response) => {
+router.get('/:userId/roles', async (req: Request, res: Response) => {
   try {
+    // We only have one role per user in app_users, but frontend expects Keycloak structure
     const { userId } = req.params;
-    const roles = await keycloakAdmin.getUserRealmRoles(userId);
-    res.json({ roles });
+    const result = await pool.query('SELECT role FROM app_users WHERE id = $1', [userId]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    const role = result.rows[0].role;
+    // Return as array of objects
+    res.json({ roles: [{ name: role }] });
   } catch (error: any) {
-    console.error('Error fetching user roles:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch user roles' });
+    res.status(500).json({ error: 'Failed to fetch user roles' });
   }
 });
 
 /**
  * GET /api/users/:userId/available-roles - Get available roles for user
  */
-router.get('/:userId/available-roles', requireAdmin, async (req: Request, res: Response) => {
-  try {
-    const { userId } = req.params;
-    const roles = await keycloakAdmin.getAvailableRealmRoles(userId);
-    res.json({ roles });
-  } catch (error: any) {
-    console.error('Error fetching available roles:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch available roles' });
-  }
+router.get('/:userId/available-roles', async (req: Request, res: Response) => {
+  // Return hardcoded roles
+  res.json({ roles: [{ name: 'user' }, { name: 'admin' }, { name: 'user-manager' }] });
 });
 
 /**
  * POST /api/users/:userId/roles - Add roles to user
  */
-router.post('/:userId/roles', requireAdmin, async (req: Request, res: Response) => {
+router.post('/:userId/roles', async (req: Request, res: Response) => {
+  // In this simple model, we just update the single role.
+  // If multiple roles are sent, we might take the first relevant one or ignore.
+  // Let's assume we take the last one in the list or 'admin' if present.
   try {
     const { userId } = req.params;
-    const { roles } = req.body;
+    const { roles } = req.body; // Expects [{name: 'admin'}]
 
-    if (!roles || !Array.isArray(roles) || roles.length === 0) {
-      return res.status(400).json({ error: 'Roles array is required' });
-    }
+    if (!roles || !Array.isArray(roles)) return res.status(400).json({ error: 'Invalid roles' });
 
-    await keycloakAdmin.addRealmRolesToUser(userId, roles);
-    
-    res.json({ message: 'Roles added successfully' });
-  } catch (error: any) {
-    console.error('Error adding roles to user:', error);
-    res.status(500).json({ error: error.message || 'Failed to add roles to user' });
+    const newRole = roles.find((r: any) => r.name === 'admin' || r.name === 'user-manager') ? roles[0].name : 'user';
+
+    await pool.query('UPDATE app_users SET role = $1 WHERE id = $2', [newRole, userId]);
+
+    res.json({ message: 'Roles updated (single role model)' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to add roles' });
   }
 });
 
 /**
  * DELETE /api/users/:userId/roles - Remove roles from user
  */
-router.delete('/:userId/roles', requireAdmin, async (req: Request, res: Response) => {
+router.delete('/:userId/roles', async (req: Request, res: Response) => {
+  // Demote to user if admin role is removed
   try {
     const { userId } = req.params;
     const { roles } = req.body;
 
-    if (!roles || !Array.isArray(roles) || roles.length === 0) {
-      return res.status(400).json({ error: 'Roles array is required' });
-    }
+    // If they are removing admin role, set to user.
+    const removingAdmin = roles.some((r: any) => r.name === 'admin');
 
-    await keycloakAdmin.removeRealmRolesFromUser(userId, roles);
-    
-    res.json({ message: 'Roles removed successfully' });
-  } catch (error: any) {
-    console.error('Error removing roles from user:', error);
-    res.status(500).json({ error: error.message || 'Failed to remove roles from user' });
+    if (removingAdmin) {
+      await pool.query("UPDATE app_users SET role = 'user' WHERE id = $1", [userId]);
+    }
+    res.json({ message: 'Roles removed' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to remove roles' });
   }
 });
 
 /**
- * GET /api/roles - Get all realm roles
+ * GET /api/roles/all - Get all realm roles
  */
-router.get('/roles/all', requireAdmin, async (req: Request, res: Response) => {
-  try {
-    const roles = await keycloakAdmin.getRealmRoles();
-    res.json({ roles });
-  } catch (error: any) {
-    console.error('Error fetching roles:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch roles' });
-  }
+router.get('/roles/all', async (req: Request, res: Response) => {
+  res.json({ roles: [{ name: 'user' }, { name: 'admin' }, { name: 'user-manager' }] });
 });
 
-/**
- * POST /api/roles - Create a new role
- */
-router.post('/roles', requireAdmin, async (req: Request, res: Response) => {
-  try {
-    const { name, description } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ error: 'Role name is required' });
-    }
-
-    await keycloakAdmin.createRole(name, description);
-    
-    res.status(201).json({ message: 'Role created successfully' });
-  } catch (error: any) {
-    console.error('Error creating role:', error);
-    res.status(500).json({ error: error.message || 'Failed to create role' });
-  }
+// Create role endpoint - ignored as roles are static
+router.post('/roles', async (req: Request, res: Response) => {
+  res.status(201).json({ message: 'Role creation not supported in simple auth mode' });
 });
 
 export default router;
-

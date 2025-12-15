@@ -6,10 +6,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const MediaDownLoadHelper_1 = __importDefault(require("./MediaDownLoadHelper"));
 const DBHelper_1 = __importDefault(require("./DBHelper"));
 const SocketEmits_1 = require("./SocketEmits");
+const timezone_1 = require("./utils/timezone");
 function ChatMessageHandler() {
     async function ChatMessageHandler(message, token) {
+        // Adjust timestamp to configured timezone
+        if (message?.Info?.Timestamp) {
+            message.Info.Timestamp = (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)).toISOString();
+        }
         let type = "text";
-        const userId = await (0, DBHelper_1.default)().GetUser(token);
+        const retrievedUserId = await (0, DBHelper_1.default)().GetUser(token);
+        const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
         const chatId = getChatId(message);
         if (message.Message) {
             if (message.Message.imageMessage || message.Message.stickerMessage) {
@@ -51,7 +57,8 @@ function ChatMessageHandler() {
         }
     }
     async function ChatupsertHelper(con, token) {
-        const userId = await (0, DBHelper_1.default)().GetUser(token);
+        const retrievedUserId = await (0, DBHelper_1.default)().GetUser(token);
+        const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
         const isGroup = isGroupConversation(con);
         const groupParticipants = isGroup
             ? extractGroupParticipants(con)
@@ -65,7 +72,7 @@ function ChatMessageHandler() {
             ? resolveMessagePreview(latestMessage.message?.message)
             : "";
         if (conversationTimestamp && unreadCount >= 0) {
-            await (0, DBHelper_1.default)().upsertChat(conversationId, lastMessagePreview || "", new Date(conversationTimestamp), unreadCount, false, false, pushName, con.ID, userId, {
+            await (0, DBHelper_1.default)().upsertChat(conversationId, lastMessagePreview || "", (0, timezone_1.adjustToConfiguredTimezone)(new Date(conversationTimestamp)), unreadCount, false, false, pushName, con.ID, userId, {
                 participants: groupParticipants,
             });
         }

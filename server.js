@@ -1,56 +1,21 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const https_1 = __importDefault(require("https"));
 const http_1 = __importDefault(require("http"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const cors_1 = __importDefault(require("cors"));
-const dotenv_1 = __importDefault(require("dotenv"));
 const Chat_1 = __importDefault(require("./Routers/Chat"));
 const UserManagement_1 = __importDefault(require("./Routers/UserManagement"));
 const Reports_1 = __importDefault(require("./Routers/Reports"));
 const Dashboard_1 = __importDefault(require("./Routers/Dashboard"));
 const processWhatsAppHooks_1 = __importDefault(require("./processWhatsAppHooks"));
 const SocketEmits_1 = require("./SocketEmits");
-const keycloak_config_1 = __importStar(require("./keycloak-config"));
-dotenv_1.default.config();
 const app = (0, express_1.default)();
 // SSL Certificate configuration
 // Read certificate paths from environment variables
@@ -128,16 +93,13 @@ const allowedOrigins = [
     defaultFrontendUrl,
     defaultFrontendUrl.replace(/^https?/, 'http'), // Also allow HTTP version if HTTPS is used
     defaultFrontendUrl.replace(/^https?/, 'https'), // Also allow HTTPS version if HTTP is used
-    'http://localhost:8080', // Allow Keycloak server
-    'https://localhost:8080',
-    process.env.KEYCLOAK_URL || 'http://localhost:8080', // Allow Keycloak server (HTTPS)
-    // Production URLs
-    'https://45.93.139.52:3443', // Production frontend
-    'https://45.93.139.52:4443', // Production backend (for redirects)
-    'https://45.93.139.52:8443', // Production Keycloak
     // Add any additional origins from environment variable (comma-separated)
     ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [])
 ];
+const Auth_1 = __importDefault(require("./Routers/Auth"));
+const authMiddleware_1 = require("./middleware/authMiddleware");
+// ... (other imports)
+// CORS middleware - must be before routes
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, Postman, or curl)
@@ -177,31 +139,15 @@ app.use((req, res, next) => {
     }
     next();
 });
-// Use session middleware
-app.use(keycloak_config_1.sessionConfig);
-// Use Keycloak middleware with custom error handling
-app.use(keycloak_config_1.default.middleware({
-    logout: '/logout',
-    admin: '/'
-}));
+// Configure session (removed as we use JWT)
+// app.use(sessionConfig);
 app.use('/imgs', express_1.default.static('imgs'));
 app.use('/audio', express_1.default.static('Audio'));
 app.use(express_1.default.json({ limit: '200mb' }));
 app.use(express_1.default.urlencoded({ limit: '200mb', extended: true }));
-// Custom authentication callback handler with CORS headers
-app.get('/auth/callback', (req, res) => {
-    // Add CORS headers before redirect
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-        res.header('Access-Control-Allow-Credentials', 'true');
-    }
-    // Handle Keycloak callback and redirect back to frontend
-    const redirectUri = process.env.FRONTEND_URL || defaultFrontendUrl;
-    res.redirect(redirectUri);
-});
-// Temporary public debug endpoint (bypasses Keycloak) for local development
-// Only enable when explicitly allowed via env DEBUG_API_PUBLIC=true to avoid exposing data in production.
+// Auth Routes
+app.use('/auth', Auth_1.default);
+// Temporary public debug endpoint
 if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
     app.get('/ChatPublic/api/GetChatsPage', async (req, res) => {
         try {
@@ -226,9 +172,9 @@ if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
         }
     });
 }
-// Protect API routes with Keycloak
-app.use('/Chat', keycloak_config_1.default.protect(), Chat_1.default);
-app.use('/api/users', keycloak_config_1.default.protect(), UserManagement_1.default);
+// Protect API routes with JWT Middleware
+app.use('/Chat', authMiddleware_1.authMiddleware, Chat_1.default);
+app.use('/api/users', authMiddleware_1.adminMiddleware, UserManagement_1.default);
 app.use('', Reports_1.default); // Reports accessible without protection for now
 app.use('', Dashboard_1.default); // Dashboard accessible without protection for now
 app.post('/webhook', async (req, res) => {

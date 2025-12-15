@@ -16,6 +16,7 @@ const fs_1 = __importDefault(require("fs"));
 const stream_1 = __importDefault(require("stream"));
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
+const timezone_1 = require("./utils/timezone");
 // Set ffmpeg path
 if (ffmpeg_static_1.default) {
     fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
@@ -320,6 +321,8 @@ function emitNewMessage(messageData) {
                     messageData.timestamp = messageData.timestamp.toISOString();
                 }
                 else if (typeof messageData.timestamp === 'number') {
+                    // Assume number is absolute timestamp, check if it needs adjustment?
+                    // Usually messageData comes from DB or Sender, so it's already adjusted or is a date.
                     messageData.timestamp = new Date(messageData.timestamp).toISOString();
                 }
                 else if (typeof messageData.timestamp === 'string') {
@@ -340,7 +343,7 @@ function emitNewMessage(messageData) {
                     timeStampValue = new Date(messageData.timeStamp);
                 }
                 else {
-                    timeStampValue = new Date();
+                    timeStampValue = (0, timezone_1.adjustToConfiguredTimezone)(new Date());
                 }
                 // Set both fields for consistency
                 messageData.timeStamp = timeStampValue;

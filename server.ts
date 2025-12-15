@@ -1,20 +1,20 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import chatRouter from './Routers/Chat';  
+import chatRouter from './Routers/Chat';
 import userManagementRouter from './Routers/UserManagement';
 import reportsRouter from './Routers/Reports';
 import dashboardRouter from './Routers/Dashboard';
 import processWhatsAppHooks from './processWhatsAppHooks';
 import { initializeSocketIO } from './SocketEmits';
-import keycloak, { sessionConfig } from './keycloak-config';
-dotenv.config();
 
-const app = express(); 
+
+
+const app = express();
 
 // SSL Certificate configuration
 // Read certificate paths from environment variables
@@ -94,25 +94,23 @@ const allowedOrigins = [
   defaultFrontendUrl,
   defaultFrontendUrl.replace(/^https?/, 'http'), // Also allow HTTP version if HTTPS is used
   defaultFrontendUrl.replace(/^https?/, 'https'), // Also allow HTTPS version if HTTP is used
-  'http://localhost:8080', // Allow Keycloak server
-  'https://localhost:8080',
-  process.env.KEYCLOAK_URL || 'http://localhost:8080', // Allow Keycloak server (HTTPS)
-  // Production URLs
-  'https://45.93.139.52:3443', // Production frontend
-  'https://45.93.139.52:4443', // Production backend (for redirects)
-  'https://45.93.139.52:8443', // Production Keycloak
   // Add any additional origins from environment variable (comma-separated)
   ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [])
 ];
 
-// CORS middleware - must be before session and Keycloak
+import authRouter from './Routers/Auth';
+import { authMiddleware, adminMiddleware } from './middleware/authMiddleware';
+
+// ... (other imports)
+
+// CORS middleware - must be before routes
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, Postman, or curl)
     if (!origin) {
       return callback(null, true);
     }
-    
+
     // Check if origin is in allowed list
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
@@ -140,46 +138,27 @@ app.use((req: Request, res: Response, next) => {
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie, Set-Cookie');
     res.header('Access-Control-Expose-Headers', 'Set-Cookie');
   }
-  
+
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
-  
+
   next();
 });
 
-// Use session middleware
-app.use(sessionConfig);
-
-// Use Keycloak middleware with custom error handling
-app.use(keycloak.middleware({
-  logout: '/logout',
-  admin: '/'
-}));
+// Configure session (removed as we use JWT)
+// app.use(sessionConfig);
 
 app.use('/imgs', express.static('imgs'));
 app.use('/audio', express.static('Audio'));
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
+// Auth Routes
+app.use('/auth', authRouter);
 
-// Custom authentication callback handler with CORS headers
-app.get('/auth/callback', (req: Request, res: Response) => {
-  // Add CORS headers before redirect
-  const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-  }
-  
-  // Handle Keycloak callback and redirect back to frontend
-  const redirectUri = process.env.FRONTEND_URL || defaultFrontendUrl;
-  res.redirect(redirectUri);
-});
-
-// Temporary public debug endpoint (bypasses Keycloak) for local development
-// Only enable when explicitly allowed via env DEBUG_API_PUBLIC=true to avoid exposing data in production.
+// Temporary public debug endpoint
 if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
   app.get('/ChatPublic/api/GetChatsPage', async (req: Request, res: Response) => {
     try {
@@ -206,16 +185,16 @@ if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
   });
 }
 
-// Protect API routes with Keycloak
-app.use('/Chat', keycloak.protect(), chatRouter);
-app.use('/api/users', keycloak.protect(), userManagementRouter);
+// Protect API routes with JWT Middleware
+app.use('/Chat', authMiddleware, chatRouter);
+app.use('/api/users', adminMiddleware, userManagementRouter);
 app.use('', reportsRouter); // Reports accessible without protection for now
 app.use('', dashboardRouter); // Dashboard accessible without protection for now
 
-app.post('/webhook',async(req:Request,res:Response)=>{
-     var data= new processWhatsAppHooks(<any>req.body);
-      console.log('✅ Webhook received:',req.body);
-      res.status(200).json({ message: 'Webhook received successfully' });
+app.post('/webhook', async (req: Request, res: Response) => {
+  var data = new processWhatsAppHooks(<any>req.body);
+  console.log('✅ Webhook received:', req.body);
+  res.status(200).json({ message: 'Webhook received successfully' });
 })
 
 // Initialize Socket.IO

@@ -30,7 +30,11 @@ function DBHelper() {
     const res = await pool.query(
       "SELECT * FROM USERS WHERE name='" + token + "'"
     );
-    return res.rows[0].jid.split(":")[0];
+    if (res.rows.length === 0) {
+      console.warn(`GetUser: User not found for token/name: ${token}`);
+      return null;
+    }
+    return res.rows[0].jid ? res.rows[0].jid.split(":")[0] : null;
   }
   async function upsertChat(
     id: string,
@@ -49,7 +53,7 @@ function DBHelper() {
     const status = normalizedOptions.status || "open";
     const participants =
       normalizedOptions.participants &&
-      Array.isArray(normalizedOptions.participants)
+        Array.isArray(normalizedOptions.participants)
         ? normalizedOptions.participants
         : undefined;
     const hasParticipants = Array.isArray(participants);

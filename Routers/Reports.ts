@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../DBConnection';
+import { adjustToConfiguredTimezone } from '../utils/timezone';
 
 const router = Router();
 
@@ -9,9 +10,9 @@ router.get('/api/reports', async (req: Request, res: Response) => {
     const { dateRange = '7days' } = req.query;
 
     // Calculate date range
-    const now = new Date();
-    let startDate = new Date();
-    
+    const now = adjustToConfiguredTimezone(new Date());
+    let startDate = adjustToConfiguredTimezone(new Date());
+
     switch (dateRange) {
       case 'today':
         startDate.setHours(0, 0, 0, 0);
@@ -35,74 +36,74 @@ router.get('/api/reports', async (req: Request, res: Response) => {
 
     // Query total messages
     const messagesResult = await pool.query(`
-      SELECT 
-        COUNT(*) as totalMessages,
-        COUNT(CASE WHEN "isFromMe" = true THEN 1 END) as sentMessages,
-        COUNT(CASE WHEN "isFromMe" = false THEN 1 END) as receivedMessages
+SELECT
+COUNT(*) as totalMessages,
+  COUNT(CASE WHEN "isFromMe" = true THEN 1 END) as sentMessages,
+  COUNT(CASE WHEN "isFromMe" = false THEN 1 END) as receivedMessages
       FROM messages
       WHERE "timeStamp" >= $1
-    `, [startDate.toISOString()]);
+  `, [startDate.toISOString()]);
 
     // Query chats with current status from status details
     const chatsResult = await pool.query(`
-      SELECT 
-        COUNT(DISTINCT c.id) as totalChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'open' THEN c.id END) as openChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'closed' THEN c.id END) as closedChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'processing' THEN c.id END) as processingChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'pending' THEN c.id END) as pendingChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'unassigned' THEN c.id END) as unassignedChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'follow_up' THEN c.id END) as followUpChats,
-        COUNT(DISTINCT CASE WHEN csd.status = 'resolved' THEN c.id END) as resolvedChats
+SELECT
+COUNT(DISTINCT c.id) as totalChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'open' THEN c.id END) as openChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'closed' THEN c.id END) as closedChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'processing' THEN c.id END) as processingChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'pending' THEN c.id END) as pendingChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'unassigned' THEN c.id END) as unassignedChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'follow_up' THEN c.id END) as followUpChats,
+  COUNT(DISTINCT CASE WHEN csd.status = 'resolved' THEN c.id END) as resolvedChats
       FROM chats c
-      LEFT JOIN (
-        SELECT DISTINCT ON (chat_id) 
-          chat_id, 
-          status, 
-          changed_at
+      LEFT JOIN(
+    SELECT DISTINCT ON(chat_id) 
+          chat_id,
+    status,
+    changed_at
         FROM chat_status_details 
         ORDER BY chat_id, changed_at DESC
-      ) csd ON c.id = csd.chat_id
+  ) csd ON c.id = csd.chat_id
       WHERE c."lastMessageTime" >= $1
-    `, [startDate.toISOString()]);
+  `, [startDate.toISOString()]);
 
     // Query messages for response time calculation (simplified)
     const responseTimeResult = await pool.query(`
-      SELECT 
-        AVG(EXTRACT(EPOCH FROM ("timeStamp" - "lastMessageTime")) / 60) as avgResponseTime
+SELECT
+AVG(EXTRACT(EPOCH FROM("timeStamp" - "lastMessageTime")) / 60) as avgResponseTime
       FROM messages m
       JOIN chats c ON m."chatId" = c.id
       WHERE m."timeStamp" >= $1 AND m."isFromMe" = false
-    `, [startDate.toISOString()]);
+  `, [startDate.toISOString()]);
 
     // Query active agents (users who have sent messages)
     const agentsResult = await pool.query(`
       SELECT COUNT(DISTINCT "userId") as activeAgents
       FROM chats
       WHERE "lastMessageTime" >= $1
-    `, [startDate.toISOString()]);
+  `, [startDate.toISOString()]);
 
     // Calculate average resolution time using status details table
     const resolutionTimeResult = await pool.query(`
-      SELECT 
-        AVG(EXTRACT(EPOCH FROM (csd_closed.changed_at - csd_open.changed_at)) / 60) as avgResolutionTime
+SELECT
+AVG(EXTRACT(EPOCH FROM(csd_closed.changed_at - csd_open.changed_at)) / 60) as avgResolutionTime
       FROM chats c
       JOIN chat_status_details csd_open ON c.id = csd_open.chat_id 
         AND csd_open.status = 'open'
         AND csd_open.changed_at = (
-          SELECT MIN(changed_at) 
+  SELECT MIN(changed_at) 
           FROM chat_status_details 
           WHERE chat_id = c.id AND status = 'open'
         )
       JOIN chat_status_details csd_closed ON c.id = csd_closed.chat_id 
         AND csd_closed.status = 'closed'
         AND csd_closed.changed_at = (
-          SELECT MAX(changed_at) 
+  SELECT MAX(changed_at) 
           FROM chat_status_details 
           WHERE chat_id = c.id AND status = 'closed'
         )
       WHERE c."lastMessageTime" >= $1
-    `, [startDate.toISOString()]);
+  `, [startDate.toISOString()]);
 
     // Mock customer satisfaction (this would need a ratings table)
     const customerSatisfaction = 4.5;

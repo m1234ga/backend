@@ -4,8 +4,9 @@ import multer, { FileFilterCallback } from 'multer';
 import path from 'path';
 import fs from 'fs';
 import messageSenderRouter from './MessageSender';
-import { env } from 'process';
+
 import { emitChatUpdate } from '../SocketEmits';
+import { adjustToConfiguredTimezone } from '../utils/timezone';
 
 const router = Router();
 
@@ -29,16 +30,16 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   limits: {
     fileSize: 50 * 1024 * 1024 // 50MB limit
   },
   fileFilter: (req: any, file: Express.Multer.File, cb: FileFilterCallback) => {
     // Allow images, videos, and audio files
-    if (file.mimetype.startsWith('image/') || 
-        file.mimetype.startsWith('video/') || 
-        file.mimetype.startsWith('audio/')) {
+    if (file.mimetype.startsWith('image/') ||
+      file.mimetype.startsWith('video/') ||
+      file.mimetype.startsWith('audio/')) {
       cb(null, true);
     } else {
       cb(new Error('Only image, video, and audio files are allowed!'));
@@ -49,12 +50,12 @@ const upload = multer({
 router.get('/api/GetContacts', async (req: Request, res: Response) => {
   try {
 
-    
-    const result = await pool.query("SELECT * FROM Contacts");
-    
 
-    
-    res.json(result.rows); 
+    const result = await pool.query("SELECT * FROM Contacts");
+
+
+
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching contacts:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -63,7 +64,7 @@ router.get('/api/GetContacts', async (req: Request, res: Response) => {
 router.get('/api/GetChats', async (req: Request, res: Response) => {
   try {
     const result = await pool.query("SELECT * FROM chatsInfo ORDER BY \"lastMessageTime\" DESC");
-    res.json(result.rows); 
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -97,11 +98,11 @@ router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
 
 // Small helper to call Wuz API endpoints; assumes WUZAPI and WUZAPI_Token env vars
 async function callWuz(path: string, method = 'GET', body?: any) {
-  const base = (env.WUZAPI || '').replace(/\/$/, '');
+  const base = (process.env.WUZAPI || '').replace(/\/$/, '');
   if (!base) throw new Error('WUZAPI env not configured');
   const url = `${base}/${path.replace(/^\//, '')}`;
   const headers: any = { 'Content-Type': 'application/json' };
-  if (env.WUZAPI_Token) headers.token = env.WUZAPI_Token;
+  if (process.env.WUZAPI_Token) headers.token = process.env.WUZAPI_Token;
   const resp = await fetch(url, {
     method,
     headers,
@@ -141,75 +142,75 @@ router.put('/api/UpdateContactTags/:contactId', async (req: Request, res: Respon
   try {
     const { contactId } = req.params;
     const { tags } = req.body;
-    
+
     // Ensure the tags column exists
     await pool.query(`
       ALTER TABLE Contacts 
       ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb
     `);
-    
+
     // Update the contact's tags
     const result = await pool.query(
       "UPDATE Contacts SET tags = $1 WHERE id = $2 RETURNING *",
       [JSON.stringify(tags), contactId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Contact not found' });
     }
-    
+
     const updatedContact = {
       ...result.rows[0],
       tags: result.rows[0].tags ? JSON.parse(result.rows[0].tags) : []
     };
-    
+
     res.json(updatedContact);
   } catch (error) {
     console.error('Error updating contact tags:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
-router.get('/api/GetMessages/:id', async (req, res)  => {
+router.get('/api/GetMessages/:id', async (req, res) => {
   const { id } = req.params; // ✅ Get route parameter
   const limit = Math.max(parseInt((req.query.limit as string) || '10', 10), 1);
   const before = (req.query.before as string) || null;
 
   try {
-      let result;
-      if (id) {
-          if (before) {
-              // Get messages before the specified timestamp (for pagination) with pushName from chats
-              result = await pool.query(
-                  `SELECT m.*, c.pushname as "pushName" 
+    let result;
+    if (id) {
+      if (before) {
+        // Get messages before the specified timestamp (for pagination) with pushName from chats
+        result = await pool.query(
+          `SELECT m.*, c.pushname as "pushName" 
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id 
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
-                  [id, before, limit]
-              );
-          } else {
-              // Get last N messages (initial load) with pushName from chats
-              result = await pool.query(
-                  `SELECT m.*, c.pushname as "pushName" 
+          [id, before, limit]
+        );
+      } else {
+        // Get last N messages (initial load) with pushName from chats
+        result = await pool.query(
+          `SELECT m.*, c.pushname as "pushName" 
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id 
                    WHERE m."chatId" = $1 
                    ORDER BY m."timeStamp" DESC LIMIT $2`,
-                  [id, limit]
-              );
-          }
-      } else {
-          result = await pool.query(`
+          [id, limit]
+        );
+      }
+    } else {
+      result = await pool.query(`
               SELECT m.*, c.pushname as "pushName" 
               FROM messages m 
               LEFT JOIN chats c ON m."chatId" = c.id
           `);
-      }
+    }
 
-      res.json({ messages: result.rows.reverse() }); // Reverse to show oldest first
+    res.json({ messages: result.rows.reverse() }); // Reverse to show oldest first
   } catch (error) {
-      console.error('Error fetching Chats:', error);
-      res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error fetching Chats:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
@@ -218,7 +219,7 @@ router.post('/api/sendImage', upload.single('image'), async (req: any, res: Resp
   try {
     const messageSender = await messageSenderRouter();
     const { phone, message } = req.body;
-    
+
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
@@ -250,7 +251,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
   try {
     const messageSender = await messageSenderRouter();
     const { phone, message } = req.body;
-    
+
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
     }
@@ -282,7 +283,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
   try {
     const messageSender = await messageSenderRouter();
     const { phone, audioData, mimeType = 'audio/ogg' } = req.body;
-    
+
     // Handle both file upload and base64 data
     let audioFile;
     if (req.file) {
@@ -294,24 +295,24 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
       console.log(`Base64 data method - Audio data length: ${audioData.length}`);
       const audioBuffer = Buffer.from(audioData, 'base64');
       console.log(`Audio buffer size: ${audioBuffer.length} bytes`);
-      
+
       if (audioBuffer.length === 0) {
         return res.status(400).json({ error: 'Audio data is empty or invalid' });
       }
-      
+
       const filename = `audio_${Date.now()}.ogg`;
       const tempPath = path.join('Audio', filename);
-      
+
       // Ensure Audio directory exists
       const audioDir = path.dirname(tempPath);
       if (!fs.existsSync(audioDir)) {
         fs.mkdirSync(audioDir, { recursive: true });
       }
-      
+
       // Write as OGG file regardless of input format
       fs.writeFileSync(tempPath, audioBuffer);
       console.log(`Audio file written to: ${tempPath}, Size: ${audioBuffer.length} bytes`);
-      
+
       audioFile = {
         path: tempPath,
         filename: filename,
@@ -337,7 +338,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
     };
 
     const result = await messageSender.sendAudio(chatMessage, audioFile);
-    
+
     // Clean up temporary file if created from base64
     if (audioData && audioFile.path) {
       try {
@@ -348,7 +349,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
         console.error('Error cleaning up temp audio file:', error);
       }
     }
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error sending audio:', error);
@@ -372,23 +373,23 @@ router.get('/api/GetTags', async (req: Request, res: Response) => {
 router.post('/api/CreateTag', async (req: Request, res: Response) => {
   try {
     const { name } = req.body;
-    
+
     if (!name || typeof name !== 'string' || name.trim() === '') {
       return res.status(400).json({ error: 'Tag name is required' });
     }
-    
+
     // Check if tag already exists
     const existingTag = await pool.query("SELECT * FROM public.tags WHERE  'tagName' = $1", [name.trim()]);
     if (existingTag.rows.length > 0) {
       return res.status(409).json({ error: 'Tag with this name already exists' });
     }
-    
+
     // Insert new tag
     const result = await pool.query(
       'INSERT INTO tags ("tagName") VALUES ($1) RETURNING *',
       [name.trim()]
     );
-    
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating tag:', error);
@@ -400,13 +401,13 @@ router.post('/api/CreateTag', async (req: Request, res: Response) => {
 router.delete('/api/DeleteTag/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    
+
     const result = await pool.query('DELETE FROM tags WHERE "tagId" = $1 RETURNING *', [id]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Tag not found' });
     }
-    
+
     res.json({ message: 'Tag deleted successfully', tag: result.rows[0] });
   } catch (error) {
     console.error('Error deleting tag:', error);
@@ -419,27 +420,27 @@ router.delete('/api/DeleteTag/:id', async (req: Request, res: Response) => {
 router.post('/api/AssignTagToChat', async (req: Request, res: Response) => {
   try {
     const { chatId, tagId, createdBy } = req.body;
-    
+
     if (!chatId || !tagId || !createdBy) {
       return res.status(400).json({ error: 'chatId, tagId, and createdBy are required' });
     }
-    
+
 
     const existingAssignment = await pool.query(
       'SELECT * FROM public."chatTags" WHERE "tagId" = $1 AND "chatId" = $2',
       [tagId, chatId]
     );
-    
+
     if (existingAssignment.rows.length > 0) {
       return res.status(409).json({ error: 'Tag already assigned to this chat' });
     }
-    
+
     // Insert new chat tag assignment
     const result = await pool.query(
       'INSERT INTO public."chatTags" ("tagId", "chatId", "createdBy","creationDate") VALUES ($1, $2, $3, $4) RETURNING *',
-      [tagId, chatId, createdBy, new Date()]
+      [tagId, chatId, createdBy, adjustToConfiguredTimezone(new Date())]
     );
-    
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error assigning tag to chat:', error);
@@ -451,16 +452,16 @@ router.post('/api/AssignTagToChat', async (req: Request, res: Response) => {
 router.delete('/api/RemoveTagFromChat/:chatId/:tagId', async (req: Request, res: Response) => {
   try {
     const { chatId, tagId } = req.params;
-    
+
     const result = await pool.query(
       'DELETE FROM public."chatTags" WHERE "chatId" = $1 AND "tagId" = $2 RETURNING *',
       [chatId, tagId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Tag assignment not found' });
     }
-    
+
     res.json({ message: 'Tag removed from chat successfully', chatTag: result.rows[0] });
   } catch (error) {
     console.error('Error removing tag from chat:', error);
@@ -472,7 +473,7 @@ router.delete('/api/RemoveTagFromChat/:chatId/:tagId', async (req: Request, res:
 router.get('/api/GetChatTags/:chatId', async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
-    
+
     const result = await pool.query(`
       SELECT t.id as tagId, t.tagname, ct.chatTagId, ct.creationDate, ct.createdBy
       FROM ChatTag ct
@@ -480,7 +481,7 @@ router.get('/api/GetChatTags/:chatId', async (req: Request, res: Response) => {
       WHERE ct.chatId = $1
       ORDER BY ct.creationDate DESC
     `, [chatId]);
-    
+
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching chat tags:', error);
@@ -495,7 +496,7 @@ router.get('/api/GetChatsWithTags', async (req: Request, res: Response) => {
       SELECT * FROM chatsInfo
       ORDER BY "lastMessageTime" DESC
     `);
-    
+
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching chats with tags:', error);
@@ -505,9 +506,9 @@ router.get('/api/GetChatsWithTags', async (req: Request, res: Response) => {
 // Forward message endpoint
 router.post('/api/ForwardMessage', async (req: Request, res: Response) => {
   try {
-    const { originalMessage, targetChatId, userId } = req.body;
-    
-    if (!originalMessage || !targetChatId || !userId) {
+    const { originalMessage, targetChatId, senderId } = req.body;
+
+    if (!originalMessage || !targetChatId || !senderId) {
       return res.status(400).json({ error: 'originalMessage, targetChatId, and userId are required' });
     }
 
@@ -515,15 +516,15 @@ router.post('/api/ForwardMessage', async (req: Request, res: Response) => {
     const forwardedMessage: any = {
       id: Date.now().toString(),
       chatId: targetChatId,
-      message: `Forwarded: ${originalMessage.message}`,
-      timestamp: new Date(),
-      ContactId: userId,
+      message: originalMessage.message,
+      timestamp: adjustToConfiguredTimezone(new Date()),
+      ContactId: originalMessage.senderId,
       messageType: originalMessage.messageType || 'text',
       isEdit: false,
       isRead: false,
       isDelivered: false,
       isFromMe: true,
-      phone: targetChatId
+      phone: originalMessage.phone
     };
 
     // Use the centralized MessageSender to actually send the forwarded message
@@ -565,7 +566,7 @@ router.post('/api/ForwardMessage', async (req: Request, res: Response) => {
 router.post('/api/ArchiveChat', async (req: Request, res: Response) => {
   try {
     const { chatId, userId } = req.body;
-    
+
     if (!chatId || !userId) {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
@@ -586,7 +587,7 @@ router.post('/api/ArchiveChat', async (req: Request, res: Response) => {
 router.post('/api/UnarchiveChat', async (req: Request, res: Response) => {
   try {
     const { chatId, userId } = req.body;
-    
+
     if (!chatId || !userId) {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
@@ -606,7 +607,7 @@ router.post('/api/UnarchiveChat', async (req: Request, res: Response) => {
 router.get('/api/GetArchivedChats/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    
+
     const result = await pool.query(`
       SELECT *
       FROM chatsInfo 
@@ -623,11 +624,12 @@ router.get('/api/GetArchivedChats/:userId', async (req: Request, res: Response) 
 // Assign chat to user endpoint
 router.post('/api/AssignChat', async (req: Request, res: Response) => {
   try {
-    const { chatId, assignedTo, assignedBy  } = req.body;
+    const { chatId, assignedTo, assignedBy } = req.body;
     if (!chatId || !assignedTo || !assignedBy) {
       return res.status(400).json({ error: 'chatId, assignedTo, and assignedBy are required' });
     }
-    const assignedAt = new Date().toISOString(); // Use toISOString() instead of toUTCString()
+
+    const assignedAt = adjustToConfiguredTimezone(new Date()).toISOString(); // Use toISOString() instead of toUTCString()
 
     // Assign the chat
     await pool.query(`
@@ -637,7 +639,7 @@ router.post('/api/AssignChat', async (req: Request, res: Response) => {
         "assignedBy" = EXCLUDED."assignedBy",
         "assignedAt" = CURRENT_TIMESTAMP
     `, [chatId, assignedTo, assignedBy, assignedAt]);
-    
+
 
     // Update chat table
     await pool.query(`
@@ -655,14 +657,14 @@ router.post('/api/AssignChat', async (req: Request, res: Response) => {
 router.get('/api/GetAssignedChats/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    
+
     const result = await pool.query(`
       SELECT c.*, ac."assignedAt", ac."assignedBy"
       FROM chatsInfo c
       JOIN "chatAssignmentDetail" ac ON c.Id = ac."chatId"
       WHERE ac."assignedTo" = $1
       ORDER BY ac."assignedAt" DESC
-    `, [userId]); 
+    `, [userId]);
 
     res.json(result.rows);
   } catch (error) {
@@ -675,7 +677,7 @@ router.get('/api/GetAssignedChats/:userId', async (req: Request, res: Response) 
 router.post('/api/MuteChat', async (req: Request, res: Response) => {
   try {
     const { chatId, userId } = req.body;
-    
+
     if (!chatId || !userId) {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
@@ -703,7 +705,7 @@ router.post('/api/MuteChat', async (req: Request, res: Response) => {
 router.post('/api/UnmuteChat', async (req: Request, res: Response) => {
   try {
     const { chatId, userId } = req.body;
-    
+
     if (!chatId || !userId) {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
@@ -729,7 +731,7 @@ router.post('/api/UnmuteChat', async (req: Request, res: Response) => {
 router.delete('/api/DeleteMessage/:messageId', async (req: Request, res: Response) => {
   try {
     const { messageId } = req.params;
-    
+
     const result = await pool.query(`
       DELETE FROM messages WHERE id = $1 RETURNING *
     `, [messageId]);
@@ -761,7 +763,7 @@ router.get('/api/GetMessageTemplates', async (req: Request, res: Response) => {
         "mediaPath" TEXT
       )
     `);
-    
+
     const result = await pool.query(`
       SELECT * FROM "messageTemplates" 
       ORDER BY "createdAt" DESC
@@ -824,7 +826,7 @@ router.put('/api/UpdateMessageTemplate/:id', async (req: Request, res: Response)
   try {
     const { id } = req.params;
     const { name, content } = req.body;
-    
+
     if (!name || !content) {
       return res.status(400).json({ error: 'name and content are required' });
     }
@@ -850,7 +852,7 @@ router.put('/api/UpdateMessageTemplate/:id', async (req: Request, res: Response)
 router.delete('/api/DeleteMessageTemplate/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    
+
     const result = await pool.query(`
       DELETE FROM "messageTemplates" WHERE id = $1 RETURNING *
     `, [id]);
@@ -870,21 +872,21 @@ router.delete('/api/DeleteMessageTemplate/:id', async (req: Request, res: Respon
 router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
   try {
     const { phoneNumber, contactName, userId } = req.body;
-    
+
     if (!phoneNumber || !userId) {
       return res.status(400).json({ error: 'phoneNumber and userId are required' });
     }
 
     // Clean phone number (remove non-digits)
     const cleanPhone = phoneNumber.replace(/\D/g, '');
-    
+
     // Check if chat already exists
     const existingChat = await pool.query(`
       SELECT * FROM chats WHERE id = $1 OR phone = $2
     `, [cleanPhone, cleanPhone]);
 
     if (existingChat.rows.length > 0) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         error: 'Chat already exists',
         existingChat: existingChat.rows[0]
       });
@@ -893,7 +895,7 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
     // Create new chat
     const chatId = cleanPhone;
     const displayName = contactName || `+${cleanPhone}`;
-    
+
     const newChat = {
       id: chatId,
       name: displayName,
@@ -910,7 +912,7 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
       userId: userId
     };
 
-  // Insert into chats table
+    // Insert into chats table
     const result = await pool.query(`
       INSERT INTO chats (
         id, name, phone, "contactId", "lastMessage", "lastMessageTime", 
@@ -1173,11 +1175,11 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
         RETURNING *
       `, [reactionId, messageId, userId, emoji]);
 
-      res.status(201).json({ 
-        success: true, 
-        message: 'Reaction added', 
+      res.status(201).json({
+        success: true,
+        message: 'Reaction added',
         action: 'added',
-        reaction: result.rows[0] 
+        reaction: result.rows[0]
       });
     }
 
@@ -1239,8 +1241,8 @@ router.put('/api/UpdateChatStatus/:chatId', async (req: Request, res: Response) 
     const result = await pool.query(`
       UPDATE chats 
       SET status = $1, 
-          closeReason = $2,
-          closedAt = CASE WHEN $1 = 'closed' THEN NOW() ELSE NULL END
+          "closeReason" = $2,
+          "closedAt" = CASE WHEN $1 = 'closed' THEN NOW() ELSE NULL END
       WHERE Id = $3
       RETURNING *
     `, [status, reason || null, chatId]);
@@ -1314,4 +1316,4 @@ router.put('/api/MarkChatAsRead/:chatId', async (req: Request, res: Response) =>
   }
 });
 
-export= router;
+export = router;

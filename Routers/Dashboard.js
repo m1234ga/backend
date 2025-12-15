@@ -4,14 +4,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 const express_1 = require("express");
 const DBConnection_1 = __importDefault(require("../DBConnection"));
+const timezone_1 = require("../utils/timezone");
 const router = (0, express_1.Router)();
 // Dashboard API endpoint
 router.get('/api/dashboard', async (req, res) => {
     try {
         const { timeRange = 'today', field = 'general' } = req.query;
         // Calculate date range
-        const now = new Date();
-        let startDate = new Date();
+        const now = (0, timezone_1.adjustToConfiguredTimezone)(new Date());
+        let startDate = (0, timezone_1.adjustToConfiguredTimezone)(new Date());
         switch (timeRange) {
             case 'today':
                 startDate.setHours(0, 0, 0, 0);

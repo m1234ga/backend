@@ -1,6 +1,7 @@
 import MediaDownLoadHelper from "./MediaDownLoadHelper";
 import DBHelper from "./DBHelper";
 import { emitNewMessage, emitChatUpdate } from "./SocketEmits";
+import { adjustToConfiguredTimezone } from "./utils/timezone";
 
 interface NormalizedParticipant {
   jid: string;
@@ -12,9 +13,16 @@ interface NormalizedParticipant {
 }
 
 function ChatMessageHandler() {
+
   async function ChatMessageHandler(message: any, token: string) {
+    // Adjust timestamp to configured timezone
+    if (message?.Info?.Timestamp) {
+      message.Info.Timestamp = adjustToConfiguredTimezone(new Date(message.Info.Timestamp)).toISOString();
+    }
+
     let type = "text";
-    const userId = await DBHelper().GetUser(token);
+    const retrievedUserId = await DBHelper().GetUser(token);
+    const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
     const chatId = getChatId(message);
     if (message.Message) {
       if (message.Message.imageMessage || message.Message.stickerMessage) {
@@ -86,12 +94,13 @@ function ChatMessageHandler() {
   }
 
   async function ChatupsertHelper(con: any, token: string) {
-    const userId = await DBHelper().GetUser(token);
+    const retrievedUserId = await DBHelper().GetUser(token);
+    const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
     const isGroup = isGroupConversation(con);
     const groupParticipants = isGroup
       ? extractGroupParticipants(con)
       : undefined;
-    const conversationId =  (con.ID || con.id || "").split("@")[0] || "";
+    const conversationId = (con.ID || con.id || "").split("@")[0] || "";
     const conversationTimestamp = normalizeConversationTimestamp(
       con.conversationTimestamp
     );
@@ -107,7 +116,7 @@ function ChatMessageHandler() {
       await DBHelper().upsertChat(
         conversationId,
         lastMessagePreview || "",
-        new Date(conversationTimestamp),
+        adjustToConfiguredTimezone(new Date(conversationTimestamp)),
         unreadCount,
         false,
         false,
