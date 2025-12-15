@@ -45,14 +45,28 @@ let globalIO: SocketIOServer | null = null;
 
 // Function to initialize Socket.IO
 export function initializeSocketIO(server: HTTPServer): SocketIOServer {
+  // Build allowed origins list - same as server CORS configuration
+  const defaultFrontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const socketAllowedOrigins = [
+    defaultFrontendUrl,
+    defaultFrontendUrl.replace(/^https?/, 'http'), // Also allow HTTP version if HTTPS is used
+    defaultFrontendUrl.replace(/^https?/, 'https'), // Also allow HTTPS version if HTTP is used
+    'http://localhost:8080', // Allow Keycloak server
+    'https://localhost:8080',
+    process.env.KEYCLOAK_URL || 'http://localhost:8080', // Allow Keycloak server (HTTPS)
+    // Production URLs
+    'https://45.93.139.52:3443', // Production frontend
+    'https://45.93.139.52:4443', // Production backend (for redirects)
+    'https://45.93.139.52:8443', // Production Keycloak
+    // Add any additional origins from environment variable (comma-separated)
+    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [])
+  ];
+
   const io = new SocketIOServer(server, {
     cors: {
-      origin: [
-        process.env.FRONTEND_URL || 'http://localhost:3000',
-        'http://localhost:8080' // Allow Keycloak server
-      ],
-      methods: ["GET", "POST"],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      origin: socketAllowedOrigins,
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
       credentials: true
     }
   });

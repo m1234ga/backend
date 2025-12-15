@@ -79,7 +79,8 @@ async function MessageSender() {
             }
             const result = await response.json();
             const messageId = result.data.Id;
-            const timestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+            let timestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+            timestamp = adjustToCairoTime(timestamp);
             // Save message to database
             const dbMessageObject = createMessageObject(messageId, message, 'text', message.message, timestamp);
             // Save chat to database
@@ -312,7 +313,9 @@ async function MessageSender() {
             }
             const result = await response.json();
             const messageId = result.data.Id || (0, uuid_1.v4)();
-            const timestamp = new Date(result.data.Timestamp || result.data.TimeStamp || Date.now());
+            const rawTimestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+            // Adjust timestamp for Cairo timezone (UTC+2)
+            const timestamp = adjustToCairoTime(rawTimestamp);
             const isoTimestamp = timestamp.toISOString();
             // Save message to database
             const dbMessageObject = createMessageObject(messageId, message, 'video', message.message || '[Video]', timestamp);

@@ -25,14 +25,27 @@ const messageSender = (0, MessageSender_1.default)();
 let globalIO = null;
 // Function to initialize Socket.IO
 function initializeSocketIO(server) {
+    // Build allowed origins list - same as server CORS configuration
+    const defaultFrontendUrl = process_1.default.env.FRONTEND_URL || 'http://localhost:3000';
+    const socketAllowedOrigins = [
+        defaultFrontendUrl,
+        defaultFrontendUrl.replace(/^https?/, 'http'), // Also allow HTTP version if HTTPS is used
+        defaultFrontendUrl.replace(/^https?/, 'https'), // Also allow HTTPS version if HTTP is used
+        'http://localhost:8080', // Allow Keycloak server
+        'https://localhost:8080',
+        process_1.default.env.KEYCLOAK_URL || 'http://localhost:8080', // Allow Keycloak server (HTTPS)
+        // Production URLs
+        'https://45.93.139.52:3443', // Production frontend
+        'https://45.93.139.52:4443', // Production backend (for redirects)
+        'https://45.93.139.52:8443', // Production Keycloak
+        // Add any additional origins from environment variable (comma-separated)
+        ...(process_1.default.env.ALLOWED_ORIGINS ? process_1.default.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [])
+    ];
     const io = new socket_io_1.Server(server, {
         cors: {
-            origin: [
-                process_1.default.env.FRONTEND_URL || 'http://localhost:3000',
-                'http://localhost:8080' // Allow Keycloak server
-            ],
-            methods: ["GET", "POST"],
-            allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+            origin: socketAllowedOrigins,
+            methods: ["GET", "POST", "OPTIONS"],
+            allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
             credentials: true
         }
     });
@@ -301,14 +314,44 @@ function initializeSocketIO(server) {
 function emitNewMessage(messageData) {
     if (globalIO) {
         try {
-            if (messageData?.timestamp && messageData.timestamp instanceof Date) {
-                messageData.timestamp = messageData.timestamp.toISOString();
+            // Handle timestamp field (lowercase)
+            if (messageData?.timestamp) {
+                if (messageData.timestamp instanceof Date) {
+                    messageData.timestamp = messageData.timestamp.toISOString();
+                }
+                else if (typeof messageData.timestamp === 'number') {
+                    messageData.timestamp = new Date(messageData.timestamp).toISOString();
+                }
+                else if (typeof messageData.timestamp === 'string') {
+                    // Already a string, ensure it's ISO format
+                    messageData.timestamp = new Date(messageData.timestamp).toISOString();
+                }
             }
-            else if (messageData?.timestamp && typeof messageData.timestamp === 'number') {
-                messageData.timestamp = new Date(messageData.timestamp).toISOString();
+            // Handle timeStamp field (from database) - ensure it's also set as timestamp
+            if (messageData?.timeStamp) {
+                let timeStampValue;
+                if (messageData.timeStamp instanceof Date) {
+                    timeStampValue = messageData.timeStamp;
+                }
+                else if (typeof messageData.timeStamp === 'number') {
+                    timeStampValue = new Date(messageData.timeStamp);
+                }
+                else if (typeof messageData.timeStamp === 'string') {
+                    timeStampValue = new Date(messageData.timeStamp);
+                }
+                else {
+                    timeStampValue = new Date();
+                }
+                // Set both fields for consistency
+                messageData.timeStamp = timeStampValue;
+                if (!messageData.timestamp) {
+                    messageData.timestamp = timeStampValue.toISOString();
+                }
             }
         }
-        catch (e) { }
+        catch (e) {
+            console.error('Error formatting timestamp in emitNewMessage:', e);
+        }
         globalIO.to(`conversation_${messageData.chatId}`).emit('new_message', messageData);
     }
 }
