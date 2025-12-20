@@ -160,7 +160,7 @@ function ChatMessageHandler() {
   function getChatId(message: any) {
     let chatId = (message.Info.Chat || "").split("@")[0];
     chatId = chatId.split(":")[0];
-    if (!message.Info.IsFromMe && message.Info.SenderAlt) {
+    if (!message.Info.IsFromMe && message.Info.SenderAlt && message.IsGroup == false) {
       chatId = (message.Info.SenderAlt || "").split("@")[0];
       chatId = chatId.split(":")[0];
     } else if (!message.Info.IsFromMe && !message.Info.SenderAlt) {
