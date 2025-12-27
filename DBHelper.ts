@@ -46,7 +46,8 @@ function DBHelper() {
     pushname: string,
     contactId: string,
     userId: string,
-    statusOrOptions?: string | UpsertChatOptions | any[]
+    statusOrOptions?: string | UpsertChatOptions | any[],
+    isFromMe: boolean = false
   ) {
     await ensureParticipantsColumn();
     const normalizedOptions = normalizeUpsertOptions(statusOrOptions);
@@ -67,10 +68,18 @@ function DBHelper() {
         DO UPDATE SET
           "lastMessage"     = EXCLUDED."lastMessage",
           "lastMessageTime" = EXCLUDED."lastMessageTime",
-          "unReadCount"     = EXCLUDED."unReadCount",
+          "unReadCount"     = CASE 
+                                WHEN EXCLUDED."unReadCount" IS NOT NULL THEN EXCLUDED."unReadCount"
+                                WHEN $13 = FALSE THEN COALESCE(chats."unReadCount", 0) + 1
+                                ELSE COALESCE(chats."unReadCount", 0)
+                              END,
           "isOnline"        = EXCLUDED."isOnline",
           "isTyping"        = EXCLUDED."isTyping",
-          "pushname"        = EXCLUDED."pushname",
+          "pushname"        = CASE 
+                                WHEN EXCLUDED."pushname" IS NOT NULL AND EXCLUDED."pushname" <> '' AND $13 = FALSE 
+                                THEN EXCLUDED."pushname" 
+                                ELSE chats."pushname" 
+                              END,
           "contactId"       = EXCLUDED."contactId",
           "userId"          = EXCLUDED."userId",
           "status"          = COALESCE(EXCLUDED."status", chats."status", 'open'),
@@ -81,7 +90,7 @@ function DBHelper() {
     const values = [
       id,
       lastMessage,
-      lastMessageTime,
+      lastMessageTime.toISOString(),
       unreadCount,
       isOnline ? 1 : 0,
       isTyping ? 1 : 0,
@@ -91,6 +100,7 @@ function DBHelper() {
       status,
       hasParticipants ? JSON.stringify(participants) : JSON.stringify([]),
       hasParticipants,
+      isFromMe,
     ];
 
     const result = await pool.query(query, values);
@@ -98,9 +108,12 @@ function DBHelper() {
   }
   async function upsertMessage(message: any, chatId: string, type: string) {
     let content =
-      message.Message.conversation || message.Message.extendedTextMessage?.text;
+      message.Message.conversation || message.Message.extendedTextMessage?.text || "";
+    var contactId = "";
     let mediaPath: string | null = null;
-
+    if (!message.isFromMe) {
+      contactId = message.Info.Sender.match(/^[^@:]+/)?.[0] || "";
+    }
     // Determine media path based on message type
     if (type == "sticker" || type == "image") {
       // Keep caption in `content`; always store images/stickers as .webp path
@@ -137,7 +150,7 @@ function DBHelper() {
       false,
       type,
       message.Info.IsFromMe,
-      message.Info.Chat,
+      contactId,
       message.Info.isEdit,
       mediaPath,
     ];
@@ -156,11 +169,60 @@ function DBHelper() {
     );
     return res.rows[0].pn;
   }
+
+  async function upsertGroup(id: string, name: string) {
+    try {
+      await pool.query(
+        `CREATE TABLE IF NOT EXISTS groups (
+          id TEXT PRIMARY KEY,
+          name TEXT
+        )`
+      );
+      const query = `
+        INSERT INTO groups (id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (id) 
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING *;
+      `;
+      const result = await pool.query(query, [id, name]);
+      return result.rows[0];
+    } catch (error) {
+      console.error("Error upserting group:", error);
+      throw error;
+    }
+  }
+
+  async function updateMessageStatus(messageIds: string[], status: 'read' | 'delivered') {
+    if (!messageIds || messageIds.length === 0) return [];
+
+    const isRead = status === 'read';
+    const isDelivered = status === 'read' || status === 'delivered';
+
+    const query = `
+      UPDATE messages 
+      SET "isRead" = CASE WHEN $1 THEN TRUE ELSE "isRead" END,
+          "isDelivered" = CASE WHEN $2 THEN TRUE ELSE "isDelivered" END
+      WHERE id = ANY($3)
+      RETURNING *;
+    `;
+
+    try {
+      const result = await pool.query(query, [isRead, isDelivered, messageIds]);
+      return result.rows;
+    } catch (err) {
+      console.error("Error updating message status:", err);
+      throw err;
+    }
+  }
+
   return {
     GetUser,
     upsertChat,
     upsertMessage,
     GetPhoneNum,
+    upsertGroup,
+    updateMessageStatus,
   };
 }
 

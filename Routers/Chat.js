@@ -172,11 +172,12 @@ router.get('/api/GetMessages/:id', async (req, res) => {
         if (id) {
             if (before) {
                 // Get messages before the specified timestamp (for pagination) with pushName from chats
-                result = await DBConnection_1.default.query(`SELECT m.*, c.pushname as "pushName" 
+                result = await DBConnection_1.default.query(`SELECT m.*, coalesce(cleaned_contacts.full_name,first_name,push_name,business_name) as "pushName" 
                    FROM messages m 
-                   LEFT JOIN chats c ON m."chatId" = c.id 
+                   LEFT JOIN chats c ON m."chatId" = c.id
+                   LEFT JOIN cleaned_contacts ON cleaned_contacts.id = m."contactId" 
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
-                   ORDER BY m."timeStamp" DESC LIMIT $3`, [id, before, limit]);
+                   ORDER BY m."timeStamp" DESC LIMIT $3`, [id, (0, timezone_1.adjustToConfiguredTimezone)(new Date(before)).toISOString(), limit]);
             }
             else {
                 // Get last N messages (initial load) with pushName from chats
@@ -263,7 +264,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req, res) => {
 router.post('/api/sendAudio', upload.single('audio'), async (req, res) => {
     try {
         const messageSender = await (0, MessageSender_1.default)();
-        const { phone, audioData, mimeType = 'audio/ogg' } = req.body;
+        const { phone, audioData, mimeType = 'audio/ogg', seconds, waveform, id } = req.body;
         // Handle both file upload and base64 data
         let audioFile;
         if (req.file) {
@@ -299,7 +300,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req, res) => {
             return res.status(400).json({ error: 'No audio file or audioData provided' });
         }
         const chatMessage = {
-            id: Date.now().toString(),
+            id: id || Date.now().toString(),
             chatId: phone,
             message: '',
             timestamp: new Date(),
@@ -310,7 +311,9 @@ router.post('/api/sendAudio', upload.single('audio'), async (req, res) => {
             isRead: false,
             isDelivered: false,
             isFromMe: true,
-            phone: phone
+            phone: phone,
+            seconds: seconds ? parseInt(seconds.toString()) : 0,
+            waveform: typeof waveform === 'string' ? JSON.parse(waveform) : (Array.isArray(waveform) ? waveform : [])
         };
         const result = await messageSender.sendAudio(chatMessage, audioFile);
         // Clean up temporary file if created from base64

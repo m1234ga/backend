@@ -65,6 +65,10 @@ function ChatMessageHandler() {
             : undefined;
         const conversationId = (con.ID || con.id || "").split("@")[0] || "";
         const conversationTimestamp = normalizeConversationTimestamp(con.conversationTimestamp);
+        // If it's a group (check original Chat JID), upsert to groups table
+        if (isGroup) {
+            await (0, DBHelper_1.default)().upsertGroup(conversationId, con?.name || con?.Name);
+        }
         const unreadCount = typeof con.unreadCount === "number" ? con.unreadCount : 0;
         const pushName = resolveConversationName(con);
         const latestMessage = getLatestConversationMessage(con);
@@ -99,21 +103,27 @@ function ChatMessageHandler() {
         }
     }
     function getChatId(message) {
-        let chatId = (message.Info.Chat || "").split("@")[0];
-        chatId = chatId.split(":")[0];
-        if (!message.Info.IsFromMe && message.Info.SenderAlt && message.IsGroup == false) {
-            chatId = (message.Info.SenderAlt || "").split("@")[0];
-            chatId = chatId.split(":")[0];
-        }
-        else if (!message.Info.IsFromMe && !message.Info.SenderAlt) {
-            chatId = (message.Info.Chat || "").split("@")[0];
-            chatId = chatId.split(":")[0];
-        }
-        return chatId;
+        const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
+            ? message.Info.Sender
+            : message.Info.Chat;
+        return source?.match(/^[^@:]+/)?.[0] || "";
+    }
+    async function handleMessageStatusUpdate(event) {
+        const messageIds = event.MessageIDs;
+        if (!messageIds || messageIds.length === 0)
+            return;
+        const type = event.Type; // 'read', 'delivered', etc.
+        const status = type === 'read' ? 'read' : 'delivered';
+        const updatedMessages = await (0, DBHelper_1.default)().updateMessageStatus(messageIds, status);
+        // Emit socket updates for each updated message to refresh UI checkmarks
+        updatedMessages.forEach(msg => {
+            (0, SocketEmits_1.emitMessageUpdate)(msg);
+        });
     }
     return {
         ChatMessageHandler,
         ChatupsertHelper,
+        handleMessageStatusUpdate,
     };
 }
 function resolveMessagePreview(content) {
@@ -242,10 +252,10 @@ function stripJid(jid) {
     return jid.split("@")[0] || jid;
 }
 function resolveConversationName(con) {
-    return (con?.PushName ||
-        con?.pushName ||
-        con?.Name ||
+    return (con?.Name ||
         con?.name ||
+        con?.PushName ||
+        con?.pushName ||
         con?.subject ||
         con?.groupMetadata?.subject ||
         con?.GroupMetadata?.subject ||

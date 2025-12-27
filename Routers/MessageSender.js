@@ -11,14 +11,21 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const DBHelper_1 = __importDefault(require("../DBHelper"));
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
+const child_process_1 = require("child_process");
 // @ts-ignore - ffmpeg-static may not have proper TS types
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
+// @ts-ignore - ffprobe-static may not have proper TS types
+const ffprobe_static_1 = __importDefault(require("ffprobe-static"));
 const timezone_1 = require("../utils/timezone");
 // Configure ffmpeg binary if available
 try {
     if (ffmpeg_static_1.default) {
         // @ts-ignore
         fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
+    }
+    if (ffprobe_static_1.default && ffprobe_static_1.default.path) {
+        // @ts-ignore
+        fluent_ffmpeg_1.default.setFfprobePath(ffprobe_static_1.default.path);
     }
 }
 catch { }
@@ -31,7 +38,8 @@ async function MessageSender() {
                 Chat: message.chatId,
                 Timestamp: timestamp.toISOString(),
                 IsFromMe: true,
-                isEdit: false
+                isEdit: false,
+                Sender: 'Me'
             },
             Message: {
                 conversation: content,
@@ -58,7 +66,7 @@ async function MessageSender() {
                 },
                 body: JSON.stringify({
                     Phone: message.phone,
-                    Body: message.message,
+                    Body: message.message ?? "",
                     Id: (0, uuid_1.v4)(),
                     ContextInfo: buildForwardContext(message)
                 }),
@@ -79,12 +87,13 @@ async function MessageSender() {
             // Store the temp ID from the original message (sent from frontend)
             const tempId = message.id;
             // Save message to database
-            const dbMessageObject = createMessageObject(messageId, message, 'text', message.message, timestamp);
+            const dbMessageObject = createMessageObject(messageId, message ?? "", 'text', message.message, timestamp);
             // Save chat to database
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message, timestamp, 0, // unreadCount
             false, // isOnline
             false, // isTyping
-            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user' // userId from current user
+            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
+            undefined, true // isFromMe
             );
             // Save message to database
             const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'text');
@@ -164,8 +173,10 @@ async function MessageSender() {
                 };
             }
             const result = await response.json();
-            const messageId = result.data.Id || (0, uuid_1.v4)();
-            const rawTimestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+            console.log('WhatsApp API response (image):', JSON.stringify(result));
+            const messageId = result.data?.Id || result.data?.id || (0, uuid_1.v4)();
+            const timestampSec = result.data?.Timestamp || result.data?.TimeStamp || result.data?.timestamp || Math.floor(Date.now() / 1000);
+            const rawTimestamp = new Date(timestampSec * 1000);
             // Adjust timestamp for Cairo timezone (UTC+2)
             const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(rawTimestamp);
             const isoTimestamp = timestamp.toISOString();
@@ -177,10 +188,14 @@ async function MessageSender() {
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message || '[Image]', timestamp, 0, // unreadCount
             false, // isOnline
             false, // isTyping
-            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user' // userId from current user
+            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
+            undefined, true // isFromMe
             );
-            // Save message to database (don't emit yet - wait for file to be saved)
-            await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
+            // Save message to database
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
+            if (savedMsg) {
+                (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
+            }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
                 (0, SocketEmits_1.emitChatUpdate)(chatResult[0]);
@@ -219,17 +234,18 @@ async function MessageSender() {
                 const refreshedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
                 if (refreshedMsg) {
                     // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const updatedTimestamp = refreshedMsg.timestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(refreshedMsg.timestamp)) : timestamp;
+                    const dbTimestamp = refreshedMsg.timeStamp || refreshedMsg.timestamp;
+                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
                     // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
                     const finalMediaPath = refreshedMsg.mediaPath || `imgs/${messageId}.webp`;
                     console.log('Emitting image update:', { id: refreshedMsg.id, tempId, mediaPath: finalMediaPath });
                     (0, SocketEmits_1.emitMessageUpdate)({
                         id: refreshedMsg.id,
                         tempId,
-                        mediaPath: finalMediaPath,
+                        message: refreshedMsg.message || message.message || '[Image]',
                         timestamp: updatedTimestamp.toISOString(),
                         timeStamp: updatedTimestamp,
-                        chatId: refreshedMsg.chatId,
+                        chatId: message.chatId,
                         messageType: 'image'
                     });
                 }
@@ -240,17 +256,18 @@ async function MessageSender() {
                 const fallbackMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
                 if (fallbackMsg) {
                     // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const updatedTimestamp = fallbackMsg.timestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(fallbackMsg.timestamp)) : timestamp;
+                    const dbTimestamp = fallbackMsg.timeStamp || fallbackMsg.timestamp;
+                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
                     // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
                     const finalMediaPath = fallbackMsg.mediaPath || `imgs/${messageId}.webp`;
                     console.log('Emitting image update (fallback):', { id: fallbackMsg.id, tempId, mediaPath: finalMediaPath });
                     (0, SocketEmits_1.emitMessageUpdate)({
                         id: fallbackMsg.id,
                         tempId,
-                        mediaPath: finalMediaPath,
+                        message: fallbackMsg.message || message.message || '[Image]',
                         timestamp: updatedTimestamp.toISOString(),
                         timeStamp: updatedTimestamp,
-                        chatId: fallbackMsg.chatId,
+                        chatId: message.chatId,
                         messageType: 'image'
                     });
                 }
@@ -320,8 +337,10 @@ async function MessageSender() {
                 };
             }
             const result = await response.json();
-            const messageId = result.data.Id || (0, uuid_1.v4)();
-            const rawTimestamp = new Date(result.data.Timestamp * 1000 || result.data.TimeStamp * 1000 || Date.now());
+            console.log('WhatsApp API response (video):', JSON.stringify(result));
+            const messageId = result.data?.Id || result.data?.id || (0, uuid_1.v4)();
+            const timestampSec = result.data?.Timestamp || result.data?.TimeStamp || result.data?.timestamp || Math.floor(Date.now() / 1000);
+            const rawTimestamp = new Date(timestampSec * 1000);
             // Adjust timestamp for Cairo timezone (UTC+2)
             const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(rawTimestamp);
             const isoTimestamp = timestamp.toISOString();
@@ -331,12 +350,14 @@ async function MessageSender() {
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message || '[Video]', timestamp, 0, // unreadCount
             false, // isOnline
             false, // isTyping
-            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user' // userId from current user
+            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
+            undefined, true // isFromMe
             );
             // Save message to database
             const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video');
             if (savedMsg) {
-                (0, SocketEmits_1.emitNewMessage)(savedMsg);
+                const tempId = message.id;
+                (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
@@ -378,12 +399,100 @@ async function MessageSender() {
             };
         }
     }
+    async function getAudioMetadata(filePath) {
+        return new Promise((resolve) => {
+            try {
+                fluent_ffmpeg_1.default.ffprobe(filePath, (err, metadata) => {
+                    if (err) {
+                        console.error('Error probing audio:', err);
+                        // Fallback for duration if ffprobe fails
+                        try {
+                            const result = (0, child_process_1.spawnSync)(ffmpeg_static_1.default, ['-i', filePath]);
+                            const output = result.stderr.toString();
+                            const match = output.match(/Duration: (\d+):(\d+):(\d+).(\d+)/);
+                            let seconds = 0;
+                            if (match) {
+                                const hours = parseInt(match[1]);
+                                const minutes = parseInt(match[2]);
+                                const secs = parseInt(match[3]);
+                                seconds = hours * 3600 + minutes * 60 + secs;
+                            }
+                            resolve({ seconds, waveform: [] });
+                        }
+                        catch (fallbackErr) {
+                            console.error('Fallback duration extraction failed:', fallbackErr);
+                            resolve({ seconds: 0, waveform: [] });
+                        }
+                        return;
+                    }
+                    const seconds = Math.floor(metadata.format.duration || 0);
+                    // Generate waveform using ffmpeg to output raw PCM
+                    const child = (0, child_process_1.spawn)(ffmpeg_static_1.default, [
+                        '-i', filePath,
+                        '-f', 's16le',
+                        '-ac', '1',
+                        '-ar', '4000',
+                        'pipe:1'
+                    ]);
+                    const samples = [];
+                    child.stdout.on('data', (data) => {
+                        for (let i = 0; i < data.length; i += 2) {
+                            if (i + 1 < data.length) {
+                                try {
+                                    samples.push(Math.abs(data.readInt16LE(i)));
+                                }
+                                catch (e) { }
+                            }
+                        }
+                    });
+                    child.on('close', () => {
+                        const waveform = [];
+                        if (samples.length > 0) {
+                            const segmentSize = Math.max(1, Math.floor(samples.length / 64));
+                            for (let i = 0; i < 64; i++) {
+                                let sum = 0;
+                                const start = i * segmentSize;
+                                const end = Math.min(start + segmentSize, samples.length);
+                                for (let j = start; j < end; j++) {
+                                    sum += samples[j];
+                                }
+                                const avg = (end - start) > 0 ? sum / (end - start) : 0;
+                                // Normalize to 0-255.
+                                waveform.push(Math.min(255, Math.floor((avg / 32768) * 255)));
+                            }
+                        }
+                        resolve({ seconds, waveform });
+                    });
+                    child.on('error', (err) => {
+                        console.error('Waveform generation error:', err);
+                        resolve({ seconds, waveform: [] });
+                    });
+                });
+            }
+            catch (e) {
+                console.error('Metadata extraction failed:', e);
+                resolve({ seconds: 0, waveform: [] });
+            }
+        });
+    }
     async function sendAudio(message, audioFile, currentUser) {
         try {
-            if (!message || !message.phone || !audioFile) {
+            // More detailed validation
+            if (!message) {
+                return { success: false, error: 'Missing required fields: message object is required' };
+            }
+            // Fallback for phone number
+            if (!message.phone && message.chatId) {
+                console.log('📢 sendAudio: phone missing, using chatId as fallback:', message.chatId);
+                message.phone = message.chatId;
+            }
+            if (!message.phone || !audioFile) {
+                const details = `phone: ${!!message.phone}, audioFile: ${!!audioFile}`;
+                console.error('❌ sendAudio missing fields:', details, 'message structure:', JSON.stringify(message));
                 return {
                     success: false,
-                    error: 'Missing required fields: phone, message, and audio file are required',
+                    error: `Missing required fields: ${!message.phone ? 'phone ' : ''}${!audioFile ? 'audio file ' : ''}are required`,
+                    details: details
                 };
             }
             // Validate audio file exists and has content
@@ -433,13 +542,18 @@ async function MessageSender() {
                     details: 'Base64 conversion resulted in empty string',
                 };
             }
+            // Get audio metadata automatically
+            const { seconds, waveform } = await getAudioMetadata(audioFile.path);
+            console.log(`✅ Automatic audio metadata: duration=${seconds}s, waveform length=${waveform.length}`);
             // Prepare the request payload
             const payload = {
                 Phone: message.phone,
-                Audio: `data:${mimeType};base64,${base64Audio}`,
-                Id: (0, uuid_1.v4)(),
+                Audio: 'data:audio/ogg;base64,' + base64Audio,
+                Id: message.id || (0, uuid_1.v4)(),
                 PTT: true,
-                MimeType: `${mimeType}; codecs=opus`,
+                MimeType: 'audio/ogg; codecs=opus',
+                Seconds: seconds || message.seconds || 0,
+                Waveform: waveform.length > 0 ? waveform : (message.waveform || []),
                 ContextInfo: buildForwardContext(message),
             };
             console.log(`Sending audio to WhatsApp API: ${process.env.WUZAPI}/chat/send/audio`);
@@ -504,8 +618,10 @@ async function MessageSender() {
                 };
             }
             const result = await response.json();
-            const messageId = result.data?.Id || (0, uuid_1.v4)();
-            const rawTimestamp = new Date(result.data?.TimeStamp * 1000 || result.data?.Timestamp * 1000 || Date.now() * 1000);
+            console.log('WhatsApp API response (audio):', JSON.stringify(result));
+            const messageId = result.data?.Id || result.data?.id || (0, uuid_1.v4)();
+            const timestampSec = result.data?.TimeStamp || result.data?.Timestamp || result.data?.timestamp || Math.floor(Date.now() / 1000);
+            const rawTimestamp = new Date(timestampSec * 1000);
             // Adjust timestamp for Cairo timezone (UTC+2)
             const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(rawTimestamp);
             const isoTimestamp = timestamp.toISOString();
@@ -514,13 +630,17 @@ async function MessageSender() {
             // Save message to database - keep readable label in message, not filename
             const dbMessageObject = createMessageObject(messageId, message, 'audio', '[Audio]', timestamp);
             // Save chat to database
-            const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, audioFile.filename, timestamp, 0, // unreadCount
+            const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, '[Audio]', timestamp, 0, // unreadCount
             false, // isOnline
             false, // isTyping
-            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user' // userId from current user
+            message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
+            undefined, true // isFromMe
             );
-            // Save message to database (don't emit yet - wait for file to be moved)
-            await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
+            // Save message to database
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
+            if (savedMsg) {
+                (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
+            }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
                 (0, SocketEmits_1.emitChatUpdate)(chatResult[0]);
@@ -537,14 +657,15 @@ async function MessageSender() {
                 const refreshedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
                 if (refreshedMsg) {
                     // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const updatedTimestamp = refreshedMsg.timestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(refreshedMsg.timestamp)) : timestamp;
+                    const dbTimestamp = refreshedMsg.timeStamp || refreshedMsg.timestamp;
+                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
                     (0, SocketEmits_1.emitMessageUpdate)({
                         id: refreshedMsg.id,
                         tempId,
-                        mediaPath: refreshedMsg.mediaPath,
+                        message: refreshedMsg.message || '[Audio]',
                         timestamp: updatedTimestamp.toISOString(),
                         timeStamp: updatedTimestamp,
-                        chatId: refreshedMsg.chatId,
+                        chatId: message.chatId,
                         messageType: 'audio'
                     });
                 }
@@ -555,14 +676,15 @@ async function MessageSender() {
                 const fallbackMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
                 if (fallbackMsg) {
                     // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const updatedTimestamp = fallbackMsg.timestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(fallbackMsg.timestamp)) : timestamp;
+                    const dbTimestamp = fallbackMsg.timeStamp || fallbackMsg.timestamp;
+                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
                     (0, SocketEmits_1.emitMessageUpdate)({
                         id: fallbackMsg.id,
                         tempId,
-                        mediaPath: fallbackMsg.mediaPath,
+                        message: fallbackMsg.message || '[Audio]',
                         timestamp: updatedTimestamp.toISOString(),
                         timeStamp: updatedTimestamp,
-                        chatId: fallbackMsg.chatId,
+                        chatId: message.chatId,
                         messageType: 'audio'
                     });
                 }

@@ -12,8 +12,14 @@ import ffmpegStatic from 'ffmpeg-static';
 import { adjustToConfiguredTimezone } from './utils/timezone';
 
 // Set ffmpeg path
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+try {
+  const ffmpegPath = require('ffmpeg-static');
+  if (ffmpegPath) {
+    ffmpeg.setFfmpegPath(ffmpegPath);
+    console.log('✅ ffmpeg path set to:', ffmpegPath);
+  }
+} catch (err) {
+  console.error('⚠️ Failed to set ffmpeg path:', err);
 }
 
 const messageSender = messageSenderRouter();
@@ -246,7 +252,20 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         const outputOggPath = path.join(tempDir, `${baseName}.ogg`);
 
         try {
-          console.log('🎤 Received audio message:', data.message);
+          console.log('🎤 Received send_audio request');
+          console.log('📦 Message data:', JSON.stringify({
+            id: data.message?.id,
+            chatId: data.message?.chatId,
+            phone: data.message?.phone,
+            messageType: data.message?.messageType
+          }));
+          console.log('📁 Filename:', data.filename);
+          console.log('🔊 Audio data present:', !!data.audioData);
+
+          if (data.message && !data.message.phone && data.message.chatId) {
+            console.log('⚠️ Phone missing, using chatId as phone fallback');
+            data.message.phone = data.message.chatId;
+          }
 
           // Ensure output directory exists
           if (!fs.existsSync(tempDir)) {
@@ -264,14 +283,22 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           // Convert directly from memory → OGG (no temp .webm file)
           console.log(`🎧 Converting in memory → ${outputOggPath}`);
           await new Promise<void>((resolve, reject) => {
-            ffmpeg(inputStream)
-              .inputFormat('webm') // input likely from browser recorder
+            const command = ffmpeg(inputStream)
               .noVideo()
               .audioCodec('libopus')
               .format('ogg')
-              .on('end', () => resolve())
-              .on('error', reject)
-              .pipe(outputStream, { end: true });
+              .on('start', (cmd) => console.log('ffmpeg started:', cmd))
+              .on('stderr', (line) => console.log('ffmpeg stderr:', line))
+              .on('end', () => {
+                console.log('ffmpeg ended successfully');
+                resolve();
+              })
+              .on('error', (err) => {
+                console.error('ffmpeg error:', err);
+                reject(err);
+              });
+
+            command.pipe(outputStream, { end: true });
           });
 
           console.log(`✅ Saved converted OGG file: ${outputOggPath}`);
@@ -289,13 +316,23 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
             email: undefined,
           };
 
+          // Get the message sender instance
+          const senderInstance = await messageSender;
+          if (!senderInstance) {
+            throw new Error('Message sender instance not initialized');
+          }
+
+          console.log('🚀 Calling sendAudio with phone:', data.message.phone);
+
           // Send audio via MessageSender (handles WuzAPI, DB insertion, and socket emits)
-          const result = await (await messageSender).sendAudio(data.message, mockFile, currentUser);
+          const result = await senderInstance.sendAudio(data.message, mockFile, currentUser);
 
           if (!result.success) {
+            console.error('❌ sendAudio failed:', result.error, result.details);
             socket.emit('message_error', {
               success: false,
               error: result.error || 'Failed to send audio',
+              details: result.details,
               originalMessage: data.message,
             });
             return;
@@ -430,7 +467,8 @@ export function emitChatUpdate(chatData: any) {
       isTyping: false,
       isOnline: true,
       phone: chatData.phone,
-      contactId: chatData.contactId
+      contactId: chatData.contactId,
+      tagsname: chatData.tagsname
     });
   }
 }

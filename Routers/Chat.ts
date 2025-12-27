@@ -181,12 +181,13 @@ router.get('/api/GetMessages/:id', async (req, res) => {
       if (before) {
         // Get messages before the specified timestamp (for pagination) with pushName from chats
         result = await pool.query(
-          `SELECT m.*, c.pushname as "pushName" 
+          `SELECT m.*, coalesce(cleaned_contacts.full_name,first_name,push_name,business_name) as "pushName" 
                    FROM messages m 
-                   LEFT JOIN chats c ON m."chatId" = c.id 
+                   LEFT JOIN chats c ON m."chatId" = c.id
+                   LEFT JOIN cleaned_contacts ON cleaned_contacts.id = m."contactId" 
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
-          [id, before, limit]
+          [id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit]
         );
       } else {
         // Get last N messages (initial load) with pushName from chats
@@ -282,7 +283,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
 router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Response) => {
   try {
     const messageSender = await messageSenderRouter();
-    const { phone, audioData, mimeType = 'audio/ogg' } = req.body;
+    const { phone, audioData, mimeType = 'audio/ogg', seconds, waveform, id } = req.body;
 
     // Handle both file upload and base64 data
     let audioFile;
@@ -323,7 +324,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
     }
 
     const chatMessage = {
-      id: Date.now().toString(),
+      id: id || Date.now().toString(),
       chatId: phone,
       message: '',
       timestamp: new Date(),
@@ -334,7 +335,9 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
       isRead: false,
       isDelivered: false,
       isFromMe: true,
-      phone: phone
+      phone: phone,
+      seconds: seconds ? parseInt(seconds.toString()) : 0,
+      waveform: typeof waveform === 'string' ? JSON.parse(waveform) : (Array.isArray(waveform) ? waveform : [])
     };
 
     const result = await messageSender.sendAudio(chatMessage, audioFile);

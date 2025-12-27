@@ -15,11 +15,17 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const stream_1 = __importDefault(require("stream"));
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
-const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const timezone_1 = require("./utils/timezone");
 // Set ffmpeg path
-if (ffmpeg_static_1.default) {
-    fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
+try {
+    const ffmpegPath = require('ffmpeg-static');
+    if (ffmpegPath) {
+        fluent_ffmpeg_1.default.setFfmpegPath(ffmpegPath);
+        console.log('✅ ffmpeg path set to:', ffmpegPath);
+    }
+}
+catch (err) {
+    console.error('⚠️ Failed to set ffmpeg path:', err);
 }
 const messageSender = (0, MessageSender_1.default)();
 // Global io instance to be used across the application
@@ -206,7 +212,19 @@ function initializeSocketIO(server) {
             const baseName = path_1.default.basename(data.filename, path_1.default.extname(data.filename));
             const outputOggPath = path_1.default.join(tempDir, `${baseName}.ogg`);
             try {
-                console.log('🎤 Received audio message:', data.message);
+                console.log('🎤 Received send_audio request');
+                console.log('📦 Message data:', JSON.stringify({
+                    id: data.message?.id,
+                    chatId: data.message?.chatId,
+                    phone: data.message?.phone,
+                    messageType: data.message?.messageType
+                }));
+                console.log('📁 Filename:', data.filename);
+                console.log('🔊 Audio data present:', !!data.audioData);
+                if (data.message && !data.message.phone && data.message.chatId) {
+                    console.log('⚠️ Phone missing, using chatId as phone fallback');
+                    data.message.phone = data.message.chatId;
+                }
                 // Ensure output directory exists
                 if (!fs_1.default.existsSync(tempDir)) {
                     fs_1.default.mkdirSync(tempDir, { recursive: true });
@@ -220,14 +238,21 @@ function initializeSocketIO(server) {
                 // Convert directly from memory → OGG (no temp .webm file)
                 console.log(`🎧 Converting in memory → ${outputOggPath}`);
                 await new Promise((resolve, reject) => {
-                    (0, fluent_ffmpeg_1.default)(inputStream)
-                        .inputFormat('webm') // input likely from browser recorder
+                    const command = (0, fluent_ffmpeg_1.default)(inputStream)
                         .noVideo()
                         .audioCodec('libopus')
                         .format('ogg')
-                        .on('end', () => resolve())
-                        .on('error', reject)
-                        .pipe(outputStream, { end: true });
+                        .on('start', (cmd) => console.log('ffmpeg started:', cmd))
+                        .on('stderr', (line) => console.log('ffmpeg stderr:', line))
+                        .on('end', () => {
+                        console.log('ffmpeg ended successfully');
+                        resolve();
+                    })
+                        .on('error', (err) => {
+                        console.error('ffmpeg error:', err);
+                        reject(err);
+                    });
+                    command.pipe(outputStream, { end: true });
                 });
                 console.log(`✅ Saved converted OGG file: ${outputOggPath}`);
                 // Prepare mock file for your message sender
@@ -241,12 +266,20 @@ function initializeSocketIO(server) {
                     username: socket.userId || 'unknown',
                     email: undefined,
                 };
+                // Get the message sender instance
+                const senderInstance = await messageSender;
+                if (!senderInstance) {
+                    throw new Error('Message sender instance not initialized');
+                }
+                console.log('🚀 Calling sendAudio with phone:', data.message.phone);
                 // Send audio via MessageSender (handles WuzAPI, DB insertion, and socket emits)
-                const result = await (await messageSender).sendAudio(data.message, mockFile, currentUser);
+                const result = await senderInstance.sendAudio(data.message, mockFile, currentUser);
                 if (!result.success) {
+                    console.error('❌ sendAudio failed:', result.error, result.details);
                     socket.emit('message_error', {
                         success: false,
                         error: result.error || 'Failed to send audio',
+                        details: result.details,
                         originalMessage: data.message,
                     });
                     return;
@@ -378,7 +411,8 @@ function emitChatUpdate(chatData) {
             isTyping: false,
             isOnline: true,
             phone: chatData.phone,
-            contactId: chatData.contactId
+            contactId: chatData.contactId,
+            tagsname: chatData.tagsname
         });
     }
 }

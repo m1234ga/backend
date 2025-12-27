@@ -15,6 +15,8 @@ class processWhatsAppHooks {
                 this.Message(HookObj);
             else if ((HookObj).type == "ChatPresence")
                 this.ChatPresence(HookObj);
+            else if ((HookObj).type == "ReadReceipt")
+                this.ReadReceipt(HookObj);
             else if ((HookObj).type == "Presence")
                 this.Presence(HookObj);
         }
@@ -32,13 +34,13 @@ class processWhatsAppHooks {
     }
     ChatPresence(obj) {
         try {
-            if (obj.event && obj.event.Data) {
-                const presenceData = obj.event.Data;
-                const chatId = presenceData.chatId || presenceData.jid;
-                const userId = presenceData.userId || presenceData.jid?.split('@')[0];
+            if (obj.event && obj.event) {
+                const presenceData = obj.event;
+                const chatId = (presenceData.Chat || presenceData.Sender)?.match(/^[^@:]+/)?.[0] || "";
+                const userId = presenceData.SenderAlt || presenceData.Sender?.match(/^[^@:]+/)?.[0] || "";
                 // Extract presence information
-                const isOnline = presenceData.state === 'available' || presenceData.state === 'online';
-                const isTyping = presenceData.state === 'composing' || presenceData.state === 'recording';
+                const isOnline = presenceData.State === 'available' || presenceData.State === 'online';
+                const isTyping = presenceData.State === 'composing' || presenceData.State === 'recording';
                 // Emit socket event for chat presence
                 (0, SocketEmits_1.emitChatPresence)({
                     chatId: chatId,
@@ -51,6 +53,11 @@ class processWhatsAppHooks {
         }
         catch (error) {
             console.error('Error handling chat presence:', error);
+        }
+    }
+    ReadReceipt(obj) {
+        if (obj.event && obj.event.MessageIDs) {
+            (0, ChatMessageHandler_1.default)().handleMessageStatusUpdate(obj.event);
         }
     }
     Presence(obj) {
