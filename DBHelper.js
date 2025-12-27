@@ -81,23 +81,24 @@ function DBHelper() {
         const result = await DBConnection_1.default.query(query, values);
         return result.rows;
     }
-    async function upsertMessage(message, chatId, type) {
+    async function upsertMessage(message, chatId, type, passedMediaPath) {
         let content = message.Message.conversation || message.Message.extendedTextMessage?.text || "";
         var contactId = "";
-        let mediaPath = null;
+        let mediaPath = passedMediaPath || message.Info?.mediaPath || null;
         if (!message.isFromMe) {
-            contactId = message.Info.Sender.match(/^[^@:]+/)?.[0] || "";
+            contactId = (message.Info.Sender || "").match(/^[^@:]+/)?.[0] || "";
         }
-        // Determine media path based on message type
-        if (type == "sticker" || type == "image") {
-            // Keep caption in `content`; always store images/stickers as .webp path
-            mediaPath = `imgs/${message.Info.ID}.webp`;
-        }
-        else if (type == "audio") {
-            mediaPath = `Audio/${message.Info.ID}.ogg`;
-        }
-        else if (type == "video") {
-            mediaPath = `Video/${message.Info.ID}.mp4`;
+        // Determine media path based on message type if not already provided
+        if (!mediaPath) {
+            if (type == "sticker" || type == "image") {
+                mediaPath = `imgs/${message.Info.ID}.webp`;
+            }
+            else if (type == "audio") {
+                mediaPath = `audio/${message.Info.ID}.ogg`;
+            }
+            else if (type == "video") {
+                mediaPath = `video/${message.Info.ID}.mp4`;
+            }
         }
         const query = `
           INSERT INTO messages (id,"chatId", message, "timeStamp", "isDelivered", "isRead","messageType","isFromMe","contactId","isEdit","mediaPath")

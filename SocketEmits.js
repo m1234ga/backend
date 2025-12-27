@@ -146,23 +146,21 @@ function initializeSocketIO(server) {
             }
             catch (error) {
                 console.error('Error handling send_image:', error);
+                // Clean up file on error
+                try {
+                    if (fs.existsSync(tempPath))
+                        fs.unlinkSync(tempPath);
+                }
+                catch (_) { }
                 socket.emit('message_error', {
                     success: false,
                     error: error instanceof Error ? error.message : 'Internal server error',
                     originalMessage: data?.message
                 });
             }
-            finally {
-                // Clean up temp file
-                try {
-                    if (fs.existsSync(tempPath))
-                        fs.unlinkSync(tempPath);
-                }
-                catch (_) { }
-            }
         });
         socket.on('send_video', async (data) => {
-            const tempPath = path_1.default.join('Video', data.filename);
+            const tempPath = path_1.default.join('video', data.filename);
             try {
                 console.log('Received video via Socket.IO:', data.message);
                 const buffer = Buffer.from(data.videoData, 'base64');
@@ -192,23 +190,21 @@ function initializeSocketIO(server) {
             }
             catch (error) {
                 console.error('Error handling send_video:', error);
+                // Clean up file on error
+                try {
+                    if (fs_1.default.existsSync(tempPath))
+                        fs_1.default.unlinkSync(tempPath);
+                }
+                catch (_) { }
                 socket.emit('message_error', {
                     success: false,
                     error: error instanceof Error ? error.message : 'Internal server error',
                     originalMessage: data?.message
                 });
             }
-            finally {
-                // Clean up temp file
-                try {
-                    if (fs_1.default.existsSync(tempPath))
-                        fs_1.default.unlinkSync(tempPath);
-                }
-                catch (_) { }
-            }
         });
         socket.on('send_audio', async (data) => {
-            const tempDir = 'Audio';
+            const tempDir = 'audio';
             const baseName = path_1.default.basename(data.filename, path_1.default.extname(data.filename));
             const outputOggPath = path_1.default.join(tempDir, `${baseName}.ogg`);
             try {
@@ -305,11 +301,10 @@ function initializeSocketIO(server) {
                 console.log('Recording cancelled:', data);
                 // Clean up any temporary files if filename is provided
                 if (data.filename) {
-                    const fs = require('fs');
                     const path = require('path');
-                    const tempPath = path.join('Audio', data.filename);
-                    if (fs.existsSync(tempPath)) {
-                        fs.unlinkSync(tempPath);
+                    const tempPath = path.join('audio', data.filename);
+                    if (fs_1.default.existsSync(tempPath)) {
+                        fs_1.default.unlinkSync(tempPath);
                         console.log('Cleaned up cancelled recording file:', data.filename);
                     }
                 }

@@ -182,22 +182,22 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         });
       } catch (error) {
         console.error('Error handling send_image:', error);
+        // Clean up file on error
+        try {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        } catch (_) { }
+
         socket.emit('message_error', {
           success: false,
           error: error instanceof Error ? error.message : 'Internal server error',
           originalMessage: data?.message
         });
-      } finally {
-        // Clean up temp file
-        try {
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        } catch (_) { }
       }
     });
 
     socket.on('send_video', async (data: { message: ChatMessage, videoData: string, filename: string }) => {
 
-      const tempPath = path.join('Video', data.filename);
+      const tempPath = path.join('video', data.filename);
 
       try {
         console.log('Received video via Socket.IO:', data.message);
@@ -232,22 +232,22 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         });
       } catch (error) {
         console.error('Error handling send_video:', error);
+        // Clean up file on error
+        try {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        } catch (_) { }
+
         socket.emit('message_error', {
           success: false,
           error: error instanceof Error ? error.message : 'Internal server error',
           originalMessage: data?.message
         });
-      } finally {
-        // Clean up temp file
-        try {
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        } catch (_) { }
       }
     });
     socket.on(
       'send_audio',
       async (data: { message: ChatMessage; audioData: string; filename: string }) => {
-        const tempDir = 'Audio';
+        const tempDir = 'audio';
         const baseName = path.basename(data.filename, path.extname(data.filename));
         const outputOggPath = path.join(tempDir, `${baseName}.ogg`);
 
@@ -361,9 +361,8 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
         // Clean up any temporary files if filename is provided
         if (data.filename) {
-          const fs = require('fs');
           const path = require('path');
-          const tempPath = path.join('Audio', data.filename);
+          const tempPath = path.join('audio', data.filename);
 
           if (fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath);

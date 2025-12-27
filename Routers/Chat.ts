@@ -13,16 +13,26 @@ const router = Router();
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Use existing folders based on file type
+    // Use absolute paths to ensure consistency regardless of CWD
+    const baseDir = path.join(__dirname, '..');
+    let targetFolder = 'imgs';
+
     if (file.mimetype.startsWith('image/')) {
-      cb(null, 'imgs/');
+      targetFolder = 'imgs';
     } else if (file.mimetype.startsWith('video/')) {
-      cb(null, 'Video/');
+      targetFolder = 'video';
     } else if (file.mimetype.startsWith('audio/')) {
-      cb(null, 'Audio/');
-    } else {
-      cb(null, 'imgs/'); // Default to imgs folder
+      targetFolder = 'audio';
     }
+
+    const destPath = path.join(baseDir, targetFolder);
+
+    // Ensure directory exists
+    if (!fs.existsSync(destPath)) {
+      fs.mkdirSync(destPath, { recursive: true });
+    }
+
+    cb(null, destPath);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -181,10 +191,10 @@ router.get('/api/GetMessages/:id', async (req, res) => {
       if (before) {
         // Get messages before the specified timestamp (for pagination) with pushName from chats
         result = await pool.query(
-          `SELECT m.*, coalesce(cleaned_contacts.full_name,first_name,push_name,business_name) as "pushName" 
+          `SELECT m.*, name as "pushName" 
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
-                   LEFT JOIN cleaned_contacts ON cleaned_contacts.id = m."contactId" 
+                   LEFT JOIN chatsInfo ci ON ci.id = m."chatId"
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
           [id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit]

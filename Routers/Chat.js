@@ -14,19 +14,24 @@ const router = (0, express_1.Router)();
 // Configure multer for file uploads
 const storage = multer_1.default.diskStorage({
     destination: (req, file, cb) => {
-        // Use existing folders based on file type
+        // Use absolute paths to ensure consistency regardless of CWD
+        const baseDir = path_1.default.join(__dirname, '..');
+        let targetFolder = 'imgs';
         if (file.mimetype.startsWith('image/')) {
-            cb(null, 'imgs/');
+            targetFolder = 'imgs';
         }
         else if (file.mimetype.startsWith('video/')) {
-            cb(null, 'Video/');
+            targetFolder = 'video';
         }
         else if (file.mimetype.startsWith('audio/')) {
-            cb(null, 'Audio/');
+            targetFolder = 'audio';
         }
-        else {
-            cb(null, 'imgs/'); // Default to imgs folder
+        const destPath = path_1.default.join(baseDir, targetFolder);
+        // Ensure directory exists
+        if (!fs_1.default.existsSync(destPath)) {
+            fs_1.default.mkdirSync(destPath, { recursive: true });
         }
+        cb(null, destPath);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -172,10 +177,10 @@ router.get('/api/GetMessages/:id', async (req, res) => {
         if (id) {
             if (before) {
                 // Get messages before the specified timestamp (for pagination) with pushName from chats
-                result = await DBConnection_1.default.query(`SELECT m.*, coalesce(cleaned_contacts.full_name,first_name,push_name,business_name) as "pushName" 
+                result = await DBConnection_1.default.query(`SELECT m.*, name as "pushName" 
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
-                   LEFT JOIN cleaned_contacts ON cleaned_contacts.id = m."contactId" 
+                   LEFT JOIN chatsInfo ci ON ci.id = m."chatId"
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
                    ORDER BY m."timeStamp" DESC LIMIT $3`, [id, (0, timezone_1.adjustToConfiguredTimezone)(new Date(before)).toISOString(), limit]);
             }

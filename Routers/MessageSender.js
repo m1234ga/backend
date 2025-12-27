@@ -8,7 +8,6 @@ const uuid_1 = require("uuid");
 const SocketEmits_1 = require("../SocketEmits");
 const DBConnection_1 = __importDefault(require("../DBConnection"));
 const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
 const DBHelper_1 = __importDefault(require("../DBHelper"));
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
 const child_process_1 = require("child_process");
@@ -19,16 +18,17 @@ const ffprobe_static_1 = __importDefault(require("ffprobe-static"));
 const timezone_1 = require("../utils/timezone");
 // Configure ffmpeg binary if available
 try {
-    if (ffmpeg_static_1.default) {
-        // @ts-ignore
-        fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
+    const binaryPath = typeof ffmpeg_static_1.default === 'string' ? ffmpeg_static_1.default : ffmpeg_static_1.default?.path;
+    if (binaryPath) {
+        fluent_ffmpeg_1.default.setFfmpegPath(binaryPath);
     }
     if (ffprobe_static_1.default && ffprobe_static_1.default.path) {
-        // @ts-ignore
         fluent_ffmpeg_1.default.setFfprobePath(ffprobe_static_1.default.path);
     }
 }
-catch { }
+catch (err) {
+    console.error('Error setting ffmpeg/ffprobe paths:', err);
+}
 async function MessageSender() {
     // Helper function to create message object in database format
     function createMessageObject(messageId, message, messageType, content, timestamp) {
@@ -179,7 +179,6 @@ async function MessageSender() {
             const rawTimestamp = new Date(timestampSec * 1000);
             // Adjust timestamp for Cairo timezone (UTC+2)
             const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(rawTimestamp);
-            const isoTimestamp = timestamp.toISOString();
             // Store the temp ID from the original message (sent from frontend)
             const tempId = message.id;
             // Save message to database
@@ -191,93 +190,27 @@ async function MessageSender() {
             message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
             undefined, true // isFromMe
             );
-            // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
+            // Determine the relative media path using the original filename from Multer
+            const mediaPath = `imgs/${imageFile.filename}`;
+            // Save message to database with the original filename
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image', mediaPath);
             if (savedMsg) {
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
+                // Emit update to confirm the message was sent and provide the correct media path
+                (0, SocketEmits_1.emitMessageUpdate)({
+                    id: savedMsg.id,
+                    tempId,
+                    message: savedMsg.message || message.message || '[Image]',
+                    timestamp: timestamp.toISOString(),
+                    timeStamp: timestamp,
+                    chatId: message.chatId,
+                    messageType: 'image',
+                    mediaPath: mediaPath
+                });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
                 (0, SocketEmits_1.emitChatUpdate)(chatResult[0]);
-            }
-            // Convert uploaded image to WEBP and save as {messageId}.webp
-            try {
-                const targetDir = path_1.default.join(__dirname, '..', 'imgs');
-                if (!fs_1.default.existsSync(targetDir)) {
-                    fs_1.default.mkdirSync(targetDir, { recursive: true });
-                }
-                const destPath = path_1.default.join(targetDir, `${messageId}.webp`);
-                await new Promise((resolve, reject) => {
-                    try {
-                        (0, fluent_ffmpeg_1.default)(imageFile.path)
-                            .outputOptions([
-                            '-vf', 'scale=iw:ih:flags=lanczos',
-                            '-lossless', '0',
-                            '-compression_level', '6',
-                            '-qscale', '75'
-                        ])
-                            .toFormat('webp')
-                            .save(destPath)
-                            .on('end', () => resolve())
-                            .on('error', (err) => reject(err));
-                    }
-                    catch (err) {
-                        reject(err);
-                    }
-                });
-                // Remove original file after successful conversion
-                try {
-                    fs_1.default.unlinkSync(imageFile.path);
-                }
-                catch { }
-                // Refresh message path in database and emit update with correct mediaPath after file is successfully saved
-                const refreshedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
-                if (refreshedMsg) {
-                    // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const dbTimestamp = refreshedMsg.timeStamp || refreshedMsg.timestamp;
-                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
-                    // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
-                    const finalMediaPath = refreshedMsg.mediaPath || `imgs/${messageId}.webp`;
-                    console.log('Emitting image update:', { id: refreshedMsg.id, tempId, mediaPath: finalMediaPath });
-                    (0, SocketEmits_1.emitMessageUpdate)({
-                        id: refreshedMsg.id,
-                        tempId,
-                        message: refreshedMsg.message || message.message || '[Image]',
-                        timestamp: updatedTimestamp.toISOString(),
-                        timeStamp: updatedTimestamp,
-                        chatId: message.chatId,
-                        messageType: 'image'
-                    });
-                }
-            }
-            catch (err) {
-                console.warn('Failed to rename/move image file:', err);
-                // Fallback: emit update even if file move failed (path should still be correct)
-                const fallbackMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image');
-                if (fallbackMsg) {
-                    // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const dbTimestamp = fallbackMsg.timeStamp || fallbackMsg.timestamp;
-                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
-                    // Ensure mediaPath is set (should be imgs/{messageId}.webp from DBHelper)
-                    const finalMediaPath = fallbackMsg.mediaPath || `imgs/${messageId}.webp`;
-                    console.log('Emitting image update (fallback):', { id: fallbackMsg.id, tempId, mediaPath: finalMediaPath });
-                    (0, SocketEmits_1.emitMessageUpdate)({
-                        id: fallbackMsg.id,
-                        tempId,
-                        message: fallbackMsg.message || message.message || '[Image]',
-                        timestamp: updatedTimestamp.toISOString(),
-                        timeStamp: updatedTimestamp,
-                        chatId: message.chatId,
-                        messageType: 'image'
-                    });
-                }
-                // Delete temp file if can't move
-                try {
-                    if (imageFile?.path && fs_1.default.existsSync(imageFile.path)) {
-                        fs_1.default.unlinkSync(imageFile.path);
-                    }
-                }
-                catch { }
             }
             return {
                 success: true,
@@ -353,35 +286,27 @@ async function MessageSender() {
             message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
             undefined, true // isFromMe
             );
+            // Determine the relative media path using the original filename from Multer
+            const mediaPath = `video/${videoFile.filename}`;
             // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video');
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath);
             if (savedMsg) {
                 const tempId = message.id;
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
+                (0, SocketEmits_1.emitMessageUpdate)({
+                    id: savedMsg.id,
+                    tempId,
+                    message: savedMsg.message || '[Video]',
+                    timestamp: timestamp.toISOString(),
+                    timeStamp: timestamp,
+                    chatId: message.chatId,
+                    messageType: 'video',
+                    mediaPath: mediaPath
+                });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
                 (0, SocketEmits_1.emitChatUpdate)(chatResult[0]);
-            }
-            // Rename/move uploaded file to use the messageId as filename
-            try {
-                const ext = path_1.default.extname(videoFile.path) || '.mp4';
-                const targetDir = path_1.default.join(__dirname, '..', 'Video');
-                if (!fs_1.default.existsSync(targetDir)) {
-                    fs_1.default.mkdirSync(targetDir, { recursive: true });
-                }
-                const destPath = path_1.default.join(targetDir, `${messageId}${ext}`);
-                fs_1.default.renameSync(videoFile.path, destPath);
-            }
-            catch (err) {
-                console.warn('Failed to rename/move video file:', err);
-                // Fallback: delete temp file if can't move
-                try {
-                    if (videoFile?.path && fs_1.default.existsSync(videoFile.path)) {
-                        fs_1.default.unlinkSync(videoFile.path);
-                    }
-                }
-                catch { }
             }
             return {
                 success: true,
@@ -636,58 +561,27 @@ async function MessageSender() {
             message.pushName ?? "", message.ContactId || message.phone, currentUser?.id || 'current_user', // userId from current user
             undefined, true // isFromMe
             );
+            // Determine the relative media path using the original filename from Multer
+            const mediaPath = `audio/${audioFile.filename}`;
             // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath);
             if (savedMsg) {
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
+                // Emit update to confirm the message was sent and provide the correct media path
+                (0, SocketEmits_1.emitMessageUpdate)({
+                    id: savedMsg.id,
+                    tempId,
+                    message: savedMsg.message || '[Audio]',
+                    timestamp: timestamp.toISOString(),
+                    timeStamp: timestamp,
+                    chatId: message.chatId,
+                    messageType: 'audio',
+                    mediaPath: mediaPath
+                });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
                 (0, SocketEmits_1.emitChatUpdate)(chatResult[0]);
-            }
-            // Rename/move uploaded audio file to use the messageId as filename
-            try {
-                const targetDir = path_1.default.join(__dirname, '..', 'Audio');
-                if (!fs_1.default.existsSync(targetDir)) {
-                    fs_1.default.mkdirSync(targetDir, { recursive: true });
-                }
-                const destPath = path_1.default.join(targetDir, `${messageId}.ogg`);
-                fs_1.default.renameSync(audioFile.path, destPath);
-                // Refresh message path in database and emit update with correct mediaPath after file is successfully moved
-                const refreshedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
-                if (refreshedMsg) {
-                    // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const dbTimestamp = refreshedMsg.timeStamp || refreshedMsg.timestamp;
-                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
-                    (0, SocketEmits_1.emitMessageUpdate)({
-                        id: refreshedMsg.id,
-                        tempId,
-                        message: refreshedMsg.message || '[Audio]',
-                        timestamp: updatedTimestamp.toISOString(),
-                        timeStamp: updatedTimestamp,
-                        chatId: message.chatId,
-                        messageType: 'audio'
-                    });
-                }
-            }
-            catch (err) {
-                console.warn('Failed to rename/move audio file:', err);
-                // Fallback: emit update even if file move failed (path should still be correct)
-                const fallbackMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio');
-                if (fallbackMsg) {
-                    // Ensure timestamp is adjusted for Cairo timezone and emit only necessary fields for update
-                    const dbTimestamp = fallbackMsg.timeStamp || fallbackMsg.timestamp;
-                    const updatedTimestamp = dbTimestamp ? (0, timezone_1.adjustToConfiguredTimezone)(new Date(dbTimestamp)) : timestamp;
-                    (0, SocketEmits_1.emitMessageUpdate)({
-                        id: fallbackMsg.id,
-                        tempId,
-                        message: fallbackMsg.message || '[Audio]',
-                        timestamp: updatedTimestamp.toISOString(),
-                        timeStamp: updatedTimestamp,
-                        chatId: message.chatId,
-                        messageType: 'audio'
-                    });
-                }
             }
             return {
                 success: true,
