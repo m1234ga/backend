@@ -4,19 +4,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const DBConnection_1 = __importDefault(require("./DBConnection"));
-let ensureParticipantsColumnPromise = null;
-async function ensureParticipantsColumn() {
-    if (!ensureParticipantsColumnPromise) {
-        ensureParticipantsColumnPromise = (async () => {
+let ensureChatColumnsPromise = null;
+async function ensureChatColumns() {
+    if (!ensureChatColumnsPromise) {
+        ensureChatColumnsPromise = (async () => {
             try {
                 await DBConnection_1.default.query(`ALTER TABLE chats ADD COLUMN IF NOT EXISTS participants JSONB DEFAULT '[]'::jsonb`);
+                await DBConnection_1.default.query(`ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar TEXT`);
+                await DBConnection_1.default.query(`ALTER TABLE chats ADD COLUMN IF NOT EXISTS "closeReason" TEXT`);
             }
             catch (error) {
-                console.error("Failed to ensure participants column on chats table:", error);
+                console.error("Failed to ensure columns on chats table:", error);
             }
         })();
     }
-    return ensureParticipantsColumnPromise;
+    return ensureChatColumnsPromise;
 }
 function DBHelper() {
     async function GetUser(token) {
@@ -28,7 +30,7 @@ function DBHelper() {
         return res.rows[0].jid ? res.rows[0].jid.split(":")[0] : null;
     }
     async function upsertChat(id, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, statusOrOptions, isFromMe = false) {
-        await ensureParticipantsColumn();
+        await ensureChatColumns();
         const normalizedOptions = normalizeUpsertOptions(statusOrOptions);
         const status = normalizedOptions.status || "open";
         const participants = normalizedOptions.participants &&

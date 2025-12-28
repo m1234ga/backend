@@ -5,24 +5,30 @@ type UpsertChatOptions = {
   participants?: any[];
 };
 
-let ensureParticipantsColumnPromise: Promise<void> | null = null;
+let ensureChatColumnsPromise: Promise<void> | null = null;
 
-async function ensureParticipantsColumn() {
-  if (!ensureParticipantsColumnPromise) {
-    ensureParticipantsColumnPromise = (async () => {
+async function ensureChatColumns() {
+  if (!ensureChatColumnsPromise) {
+    ensureChatColumnsPromise = (async () => {
       try {
         await pool.query(
           `ALTER TABLE chats ADD COLUMN IF NOT EXISTS participants JSONB DEFAULT '[]'::jsonb`
         );
+        await pool.query(
+          `ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar TEXT`
+        );
+        await pool.query(
+          `ALTER TABLE chats ADD COLUMN IF NOT EXISTS "closeReason" TEXT`
+        );
       } catch (error) {
         console.error(
-          "Failed to ensure participants column on chats table:",
+          "Failed to ensure columns on chats table:",
           error
         );
       }
     })();
   }
-  return ensureParticipantsColumnPromise;
+  return ensureChatColumnsPromise;
 }
 
 function DBHelper() {
@@ -49,7 +55,7 @@ function DBHelper() {
     statusOrOptions?: string | UpsertChatOptions | any[],
     isFromMe: boolean = false
   ) {
-    await ensureParticipantsColumn();
+    await ensureChatColumns();
     const normalizedOptions = normalizeUpsertOptions(statusOrOptions);
     const status = normalizedOptions.status || "open";
     const participants =

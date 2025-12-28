@@ -17,6 +17,7 @@ const Dashboard_1 = __importDefault(require("./Routers/Dashboard"));
 const processWhatsAppHooks_1 = __importDefault(require("./processWhatsAppHooks"));
 const SocketEmits_1 = require("./SocketEmits");
 const app = (0, express_1.default)();
+// Trigger restart
 // SSL Certificate configuration
 // Read certificate paths from environment variables
 const useHttps = process.env.USE_HTTPS !== 'false'; // Default to true unless explicitly disabled

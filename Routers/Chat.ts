@@ -73,7 +73,7 @@ router.get('/api/GetContacts', async (req: Request, res: Response) => {
 });
 router.get('/api/GetChats', async (req: Request, res: Response) => {
   try {
-    const result = await pool.query("SELECT * FROM chatsInfo ORDER BY \"lastMessageTime\" DESC");
+    const result = await pool.query("SELECT ci.*, c.\"closeReason\" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id ORDER BY ci.\"lastMessageTime\" DESC");
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching chats:', error);
@@ -89,13 +89,13 @@ router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
     const offset = (page - 1) * limit;
     const status = (req.query.status as string) || null;
 
-    let baseSql = 'SELECT * FROM chatsInfo';
+    let baseSql = 'SELECT ci.*, c."closeReason" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id';
     const params: any[] = [];
     if (status) {
-      baseSql += ' WHERE status = $1';
+      baseSql += ' WHERE ci.status = $1';
       params.push(status);
     }
-    baseSql += ' ORDER BY "lastMessageTime" DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+    baseSql += ' ORDER BY ci."lastMessageTime" DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
 
     const result = await pool.query(baseSql, params);
@@ -143,6 +143,41 @@ router.get('/api/GetWuzPresence/:phone', async (req: Request, res: Response) => 
     res.json(result.data);
   } catch (error) {
     console.error('Error fetching Wuz presence:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Refresh chat avatar from WuzAPI
+router.post('/api/RefreshChatAvatar', async (req: Request, res: Response) => {
+  try {
+    const { chatId, phone } = req.body;
+
+    if (!chatId || !phone) {
+      return res.status(400).json({ error: 'chatId and phone are required' });
+    }
+
+    const apiResult = await callWuz('user/avatar', 'POST', {
+      Phone: phone,
+      Preview: true
+    });
+
+
+    if (!apiResult.ok) {
+      return res.status(502).json({ error: 'Failed to fetch avatar from WuzAPI', details: apiResult });
+    }
+
+    const avatarUrl = apiResult.data?.data?.url;
+    console.log(apiResult.data.data.url);
+    if (avatarUrl) {
+      // Update database
+      await pool.query('UPDATE chats SET avatar = $1 WHERE id = $2', [avatarUrl, chatId]);
+      res.json({ success: true, avatar: avatarUrl });
+    } else {
+      res.json({ success: false, message: 'No avatar returned' });
+    }
+
+  } catch (error) {
+    console.error('Error refreshing chat avatar:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -1281,9 +1316,11 @@ router.get('/api/GetChatsByStatus/:status', async (req: Request, res: Response) 
     }
 
     const result = await pool.query(`
-      SELECT * FROM chatsInfo 
-      WHERE status = $1
-      ORDER BY "lastMessageTime" DESC
+      SELECT ci.*, c."closeReason" as reason 
+      FROM chatsInfo ci 
+      LEFT JOIN chats c ON ci.id = c.id
+      WHERE ci.status = $1
+      ORDER BY ci."lastMessageTime" DESC
     `, [status]);
 
     res.json(result.rows);
