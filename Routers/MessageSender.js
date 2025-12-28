@@ -204,8 +204,7 @@ async function MessageSender() {
                     timestamp: timestamp.toISOString(),
                     timeStamp: timestamp,
                     chatId: message.chatId,
-                    messageType: 'image',
-                    mediaPath: mediaPath
+                    messageType: 'image'
                 });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
@@ -287,22 +286,12 @@ async function MessageSender() {
             undefined, true // isFromMe
             );
             // Determine the relative media path using the original filename from Multer
-            const mediaPath = `video/${videoFile.filename}`;
+            const mediaPath = `Video/${videoFile.filename}`;
             // Save message to database
             const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath);
             if (savedMsg) {
                 const tempId = message.id;
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
-                (0, SocketEmits_1.emitMessageUpdate)({
-                    id: savedMsg.id,
-                    tempId,
-                    message: savedMsg.message || '[Video]',
-                    timestamp: timestamp.toISOString(),
-                    timeStamp: timestamp,
-                    chatId: message.chatId,
-                    messageType: 'video',
-                    mediaPath: mediaPath
-                });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
             if (chatResult && chatResult.length > 0) {
@@ -562,7 +551,7 @@ async function MessageSender() {
             undefined, true // isFromMe
             );
             // Determine the relative media path using the original filename from Multer
-            const mediaPath = `audio/${audioFile.filename}`;
+            const mediaPath = `Audio/${audioFile.filename}`;
             // Save message to database
             const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath);
             if (savedMsg) {
@@ -575,8 +564,7 @@ async function MessageSender() {
                     timestamp: timestamp.toISOString(),
                     timeStamp: timestamp,
                     chatId: message.chatId,
-                    messageType: 'audio',
-                    mediaPath: mediaPath
+                    messageType: 'audio'
                 });
             }
             // Emit socket events - only chat update (message already added optimistically on frontend)
