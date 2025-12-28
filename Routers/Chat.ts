@@ -1257,22 +1257,22 @@ router.get('/api/GetMessageReactions/:messageId', async (req: Request, res: Resp
 
 // Remove reaction from message endpoint
 router.delete('/api/RemoveReaction/:reactionId', async (req: Request, res: Response) => {
-  try {
-    const { reactionId } = req.params;
+  // try {
+  //   const { reactionId } = req.params;
 
-    const result = await pool.query(`
-      DELETE FROM message_reactions WHERE id = $1 RETURNING *
-    `, [reactionId]);
+  //   const result = await pool.query(`
+  //     DELETE FROM message_reactions WHERE id = $1 RETURNING *
+  //   `, [reactionId]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Reaction not found' });
-    }
+  //   if (result.rows.length === 0) {
+  //     return res.status(404).json({ error: 'Reaction not found' });
+  //   }
 
-    res.json({ success: true, message: 'Reaction removed successfully' });
-  } catch (error) {
-    console.error('Error removing reaction:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+  //   res.json({ success: true, message: 'Reaction removed successfully' });
+  // } catch (error) {
+  //   console.error('Error removing reaction:', error);
+  //   res.status(500).json({ error: 'Internal Server Error' });
+  // }
 });
 
 // Update chat status (open/closed)
