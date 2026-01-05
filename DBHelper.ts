@@ -20,6 +20,9 @@ async function ensureChatColumns() {
         await pool.query(
           `ALTER TABLE chats ADD COLUMN IF NOT EXISTS "closeReason" TEXT`
         );
+        await pool.query(
+          `ALTER TABLE messages ADD COLUMN IF NOT EXISTS "userId" TEXT`
+        );
       } catch (error) {
         console.error(
           "Failed to ensure columns on chats table:",
@@ -112,7 +115,7 @@ function DBHelper() {
     const result = await pool.query(query, values);
     return result.rows;
   }
-  async function upsertMessage(message: any, chatId: string, type: string, passedMediaPath?: string) {
+  async function upsertMessage(message: any, chatId: string, type: string, passedMediaPath?: string, userId?: string) {
     let content =
       message.Message.conversation || message.Message.extendedTextMessage?.text || "";
     var contactId = "";
@@ -134,8 +137,8 @@ function DBHelper() {
     }
 
     const query = `
-          INSERT INTO messages (id,"chatId", message, "timeStamp", "isDelivered", "isRead","messageType","isFromMe","contactId","isEdit","mediaPath")
-          VALUES ($1,$2, $3, $4, $5, $6, $7, $8,$9,$10,$11)
+          INSERT INTO messages (id,"chatId", message, "timeStamp", "isDelivered", "isRead","messageType","isFromMe","contactId","isEdit","mediaPath","userId")
+          VALUES ($1,$2, $3, $4, $5, $6, $7, $8,$9,$10,$11,$12)
           ON CONFLICT (id)
            DO UPDATE
             SET message = EXCLUDED.message,
@@ -146,7 +149,8 @@ function DBHelper() {
             "isFromMe"=EXCLUDED."isFromMe",
             "contactId"=EXCLUDED."contactId",
             "isEdit"=EXCLUDED."isEdit",
-            "mediaPath"=EXCLUDED."mediaPath"
+            "mediaPath"=EXCLUDED."mediaPath",
+            "userId"=EXCLUDED."userId"
           RETURNING *;
         `;
 
@@ -162,6 +166,7 @@ function DBHelper() {
       contactId,
       message.Info.isEdit,
       mediaPath,
+      userId || null
     ];
     try {
       const result = await pool.query(query, values);

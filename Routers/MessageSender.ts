@@ -110,7 +110,7 @@ export default async function MessageSender() {
       );
 
       // Save message to database
-      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'text');
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'text', undefined, currentUser?.id);
       if (savedMsg) {
         emitNewMessage({ ...savedMsg, tempId });
 
@@ -226,7 +226,7 @@ export default async function MessageSender() {
       const mediaPath = `imgs/${imageFile.filename}`;
 
       // Save message to database with the original filename
-      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'image', mediaPath);
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'image', mediaPath, currentUser?.id);
       if (savedMsg) {
         emitNewMessage({ ...savedMsg, tempId });
 
@@ -338,7 +338,7 @@ export default async function MessageSender() {
       const mediaPath = `Video/${videoFile.filename}`;
 
       // Save message to database
-      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath);
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath, currentUser?.id);
       if (savedMsg) {
         const tempId = message.id;
         emitNewMessage({ ...savedMsg, tempId });
@@ -641,7 +641,7 @@ export default async function MessageSender() {
       const mediaPath = `Audio/${audioFile.filename}`;
 
       // Save message to database
-      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath);
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath, currentUser?.id);
       if (savedMsg) {
         emitNewMessage({ ...savedMsg, tempId });
 

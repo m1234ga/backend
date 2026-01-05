@@ -1154,22 +1154,23 @@ router.post('/api/ReplyToMessage', async (req: Request, res: Response) => {
       INSERT INTO messages (
         id, "chatId", message, timestamp, "ContactId",
         "messageType", "isEdit", "isRead", "isDelivered",
-        "isFromMe", phone, "replyToMessageId"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "isFromMe", phone, "replyToMessageId", "userId"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `, [
       replyMessageData.id,
       replyMessageData.chatId,
       replyMessageData.message,
       replyMessageData.timestamp,
-      replyMessageData.ContactId,
+      replyMessageData.ContactId, // This is already the userId passed in
       replyMessageData.messageType,
       replyMessageData.isEdit,
       replyMessageData.isRead,
       replyMessageData.isDelivered,
       replyMessageData.isFromMe,
       replyMessageData.phone,
-      replyMessageData.replyToMessageId
+      replyMessageData.replyToMessageId,
+      userId // Explicitly save as userId too
     ]);
 
     // Update chat's last message
