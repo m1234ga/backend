@@ -739,21 +739,100 @@ export default async function MessageSender() {
     }
   }
 
+  async function sendReaction(chatId: string, messageId: string, emoji: string) {
+    try {
+      if (!chatId || !messageId) {
+        return {
+          success: false,
+          error: 'Missing required fields: chatId and messageId are required',
+        };
+      }
+
+      // If emoji is empty string, it means remove reaction
+      const reactionBody = emoji || "";
+
+      const response = await fetch(process.env.WUZAPI + '/chat/send/reaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          token: process.env.WUZAPI_Token || "",
+        },
+        body: JSON.stringify({
+          Phone: chatId,
+          Body: reactionBody,
+          Id: messageId
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('WhatsApp API error (reaction):', response.status, errorText);
+        return {
+          success: false,
+          error: 'Failed to send reaction via WhatsApp API',
+          details: errorText,
+        };
+      }
+
+      const result = await response.json();
+      return {
+        success: true,
+        message: 'Reaction sent successfully',
+        data: result
+      };
+
+    } catch (error) {
+      console.error('Error in sendReaction:', error);
+      return {
+        success: false,
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
   return {
     sendMessage,
     sendVideo,
     sendImage,
     sendAudio,
-    createMessageTemplate
+    createMessageTemplate,
+    sendReaction
   }
 }
 
 // Build WhatsApp-like forward context when requested by caller
 function buildForwardContext(message: any) {
   const ctx = (message && (message as any).forwardContext) || (message as any)?.contextInfo;
+
   if (!ctx) {
+    // If no context provided but replyToMessage exists, try to build it for reply functionality
+    if (message?.replyToMessage) {
+      const reply = message.replyToMessage;
+      let participant = reply.ContactId || reply.participant;
+      // Ensure participant has domain
+      if (participant && !participant.includes('@')) {
+        participant = `${participant}@s.whatsapp.net`;
+      } else if (!participant && reply.phone) {
+        participant = `${reply.phone}@s.whatsapp.net`;
+      }
+
+      // Construct basic QuotedMessage
+      // Note: Ideally this should match the type of the replied message (imageMessage, etc.)
+      // For now default to conversation (text)
+      const quotedMessage = { conversation: reply.message || '' };
+
+      return {
+        StanzaId: reply.id,
+        Participant: participant || '',
+        QuotedMessage: quotedMessage,
+        IsForwarded: false,
+        MentionedJID: []
+      };
+    }
     return {};
   }
+
   const phone = message?.phone || '';
   const stanzaId = ctx.StanzaId || ctx.stanzaId || '';
   const participant =
@@ -763,10 +842,15 @@ function buildForwardContext(message: any) {
     typeof ctx.IsForwarded === 'boolean'
       ? ctx.IsForwarded
       : (ctx.isForwarded === true);
+
+  // Extract QuotedMessage if present (for replies)
+  const quotedMessage = ctx.QuotedMessage || ctx.quotedMessage;
+
   return {
     StanzaId: stanzaId,
     Participant: participant,
     IsForwarded: !!isForwarded,
     MentionedJID: Array.isArray(mentioned) ? mentioned : [],
+    ...(quotedMessage ? { QuotedMessage: quotedMessage } : {})
   };
 }

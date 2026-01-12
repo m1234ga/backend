@@ -601,3 +601,12 @@ export function emitMessageUpdate(messageData: any) {
     globalIO.to(`conversation_${messageData.chatId}`).emit('message_updated', messageData);
   }
 }
+
+export function emitReactionUpdate(chatId: string, messageId: string, reactions: any[]) {
+  if (globalIO) {
+    globalIO.to(`conversation_${chatId}`).emit('reaction_updated', {
+      messageId,
+      reactions
+    });
+  }
+}
