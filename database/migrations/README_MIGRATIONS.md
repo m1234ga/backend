@@ -12,6 +12,11 @@
 - **Type**: TEXT (nullable)
 - **Migration File**: `backend/database/migrations/add_media_path_to_message_templates.sql`
 
+### 3. `message_reactions` table
+- **Purpose**: Stores emoji reactions to messages
+- **Columns**: `id`, `messageId`, `participant`, `reaction`, `createdAt`
+- **Migration File**: `backend/database/migrations/create_message_reactions_table.sql`
+
 ## How to Run Migrations
 
 ### Option 1: Run migrations manually via psql
@@ -23,6 +28,7 @@ psql -U your_username -d your_database_name
 # Run the migrations
 \i backend/database/migrations/add_media_path_to_messages.sql
 \i backend/database/migrations/add_media_path_to_message_templates.sql
+\i backend/database/migrations/create_message_reactions_table.sql
 ```
 
 ### Option 2: Run via Node.js script
@@ -33,6 +39,7 @@ You can create a script to run migrations automatically, or run them directly:
 cd backend
 psql -U your_username -d your_database_name -f database/migrations/add_media_path_to_messages.sql
 psql -U your_username -d your_database_name -f database/migrations/add_media_path_to_message_templates.sql
+psql -U your_username -d your_database_name -f database/migrations/create_message_reactions_table.sql
 ```
 
 ### Option 3: The code will handle it automatically

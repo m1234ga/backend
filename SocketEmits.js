@@ -8,6 +8,7 @@ exports.emitNewMessage = emitNewMessage;
 exports.emitChatUpdate = emitChatUpdate;
 exports.emitChatPresence = emitChatPresence;
 exports.emitMessageUpdate = emitMessageUpdate;
+exports.emitReactionUpdate = emitReactionUpdate;
 const socket_io_1 = require("socket.io");
 const process_1 = __importDefault(require("process"));
 const MessageSender_1 = __importDefault(require("./Routers/MessageSender"));
@@ -330,6 +331,108 @@ function initializeSocketIO(server) {
                 conversationId
             });
         });
+        socket.on('message_forwarded', async (data) => {
+            try {
+                const { originalMessage, targetChatId, targetPhone, senderId } = data;
+                console.log(`Forwarding message from ${originalMessage.chatId} to ${targetChatId} (${targetPhone})`);
+                // Use the phone number provided from the selected conversation in the UI
+                const recipientPhone = targetPhone || (targetChatId.includes('@') ? targetChatId.split('@')[0] : targetChatId);
+                // Build Participant JID for forward context
+                // Participant should be the original sender's WhatsApp JID
+                let participantJID = originalMessage.ContactId;
+                if (participantJID && !participantJID.includes('@')) {
+                    participantJID = `${participantJID}@s.whatsapp.net`;
+                }
+                // Build forwarded message payload with context for proper WhatsApp labeling
+                const forwardedMessage = {
+                    ...originalMessage, // Incorporate original message fields (message, attachments, etc.)
+                    id: Date.now().toString(),
+                    chatId: targetChatId,
+                    phone: recipientPhone, // Use the provided recipient phone number for the API call
+                    timestamp: (0, timezone_1.adjustToConfiguredTimezone)(new Date()),
+                    timeStamp: (0, timezone_1.adjustToConfiguredTimezone)(new Date()),
+                    ContactId: senderId, // The person who is doing the forwarding
+                    isFromMe: true,
+                    isEdit: false,
+                    isRead: false,
+                    isDelivered: false,
+                    // Context for WhatsApp to recognize this as a forwarded message
+                    forwardContext: {
+                        StanzaId: originalMessage.id, // ID of the original message
+                        Participant: participantJID, // The original sender's JID
+                        IsForwarded: true
+                    }
+                };
+                const senderInstance = await messageSender;
+                const currentUser = { id: senderId, username: senderId };
+                let result = { success: false, error: 'Unsupported message type' };
+                if (forwardedMessage.messageType === 'text') {
+                    result = await senderInstance.sendMessage(forwardedMessage, currentUser);
+                }
+                else {
+                    // For media messages, we need the local file path to resend
+                    if (forwardedMessage.mediaPath) {
+                        // Determine the absolute path to the file
+                        let filePath = forwardedMessage.mediaPath;
+                        if (!path_1.default.isAbsolute(filePath)) {
+                            // Usually paths are relative to the project root (e.g., 'imgs/file.jpg')
+                            filePath = path_1.default.join(process_1.default.cwd(), filePath);
+                        }
+                        if (fs_1.default.existsSync(filePath)) {
+                            const mockFile = {
+                                path: filePath,
+                                filename: path_1.default.basename(filePath),
+                                mimetype: forwardedMessage.messageType === 'image' ? 'image/jpeg' :
+                                    (forwardedMessage.messageType === 'video' ? 'video/mp4' : 'audio/ogg')
+                            };
+                            if (forwardedMessage.messageType === 'image') {
+                                result = await senderInstance.sendImage(forwardedMessage, mockFile, currentUser);
+                            }
+                            else if (forwardedMessage.messageType === 'video') {
+                                result = await senderInstance.sendVideo(forwardedMessage, mockFile, currentUser);
+                            }
+                            else if (forwardedMessage.messageType === 'audio') {
+                                result = await senderInstance.sendAudio(forwardedMessage, mockFile, currentUser);
+                            }
+                        }
+                        else {
+                            console.error('Media file not found for forwarding:', filePath);
+                            // Fallback to text message if the file is missing
+                            forwardedMessage.messageType = 'text';
+                            forwardedMessage.message = `${forwardedMessage.message || '[Media]'} (Original file not found on server)`;
+                            result = await senderInstance.sendMessage(forwardedMessage, currentUser);
+                        }
+                    }
+                    else {
+                        // No mediaPath available, fallback to text
+                        forwardedMessage.messageType = 'text';
+                        result = await senderInstance.sendMessage(forwardedMessage, currentUser);
+                    }
+                }
+                if (result.success) {
+                    socket.emit('message_forward_success', {
+                        success: true,
+                        messageId: result.messageId,
+                        targetChatId: targetChatId
+                    });
+                }
+                else {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to forward message',
+                        originalMessage: originalMessage
+                    });
+                }
+            }
+            catch (error) {
+                console.error('Error in message_forwarded handler:', error);
+                socket.emit('message_error', {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Internal server error',
+                    originalMessage: data.originalMessage
+                });
+            }
+        });
         socket.on('disconnect', () => {
             if (socket.userId) {
                 connectedUsers.delete(socket.userId);
@@ -434,5 +537,13 @@ function emitMessageUpdate(messageData) {
         }
         catch (e) { }
         globalIO.to(`conversation_${messageData.chatId}`).emit('message_updated', messageData);
+    }
+}
+function emitReactionUpdate(chatId, messageId, reactions) {
+    if (globalIO) {
+        globalIO.to(`conversation_${chatId}`).emit('reaction_updated', {
+            messageId,
+            reactions
+        });
     }
 }

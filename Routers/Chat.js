@@ -1020,22 +1020,23 @@ router.post('/api/ReplyToMessage', async (req, res) => {
       INSERT INTO messages (
         id, "chatId", message, timestamp, "ContactId",
         "messageType", "isEdit", "isRead", "isDelivered",
-        "isFromMe", phone, "replyToMessageId"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "isFromMe", phone, "replyToMessageId", "userId"
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `, [
             replyMessageData.id,
             replyMessageData.chatId,
             replyMessageData.message,
             replyMessageData.timestamp,
-            replyMessageData.ContactId,
+            replyMessageData.ContactId, // This is already the userId passed in
             replyMessageData.messageType,
             replyMessageData.isEdit,
             replyMessageData.isRead,
             replyMessageData.isDelivered,
             replyMessageData.isFromMe,
             replyMessageData.phone,
-            replyMessageData.replyToMessageId
+            replyMessageData.replyToMessageId,
+            userId // Explicitly save as userId too
         ]);
         // Update chat's last message
         await DBConnection_1.default.query(`
@@ -1066,22 +1067,43 @@ router.post('/api/AddReaction', async (req, res) => {
       SELECT * FROM message_reactions 
       WHERE "messageId" = $1 AND "userId" = $2 AND emoji = $3
     `, [messageId, userId, emoji]);
+        const messageSender = await (0, MessageSender_1.default)();
+        // Get chatId from messages table
+        const msgRes = await DBConnection_1.default.query('SELECT "chatId" FROM messages WHERE id = $1', [messageId]);
+        if (msgRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        const chatId = msgRes.rows[0].chatId;
         if (existingReaction.rows.length > 0) {
             // Remove existing reaction
+            // Send removal to WhatsApp (empty string)
+            await messageSender.sendReaction(chatId, messageId, "");
             await DBConnection_1.default.query(`
         DELETE FROM message_reactions 
         WHERE "messageId" = $1 AND "userId" = $2 AND emoji = $3
       `, [messageId, userId, emoji]);
+            // Fetch updated reactions to emit
+            const updatedReactions = await DBConnection_1.default.query(`
+          SELECT * FROM message_reactions WHERE "messageId" = $1
+      `, [messageId]);
+            (0, SocketEmits_1.emitReactionUpdate)(chatId, messageId, updatedReactions.rows);
             res.json({ success: true, message: 'Reaction removed', action: 'removed' });
         }
         else {
             // Add new reaction
+            // Send reaction to WhatsApp
+            await messageSender.sendReaction(chatId, messageId, emoji);
             const reactionId = Date.now().toString();
             const result = await DBConnection_1.default.query(`
         INSERT INTO message_reactions (id, "messageId", "userId", emoji, "createdAt")
         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
         RETURNING *
       `, [reactionId, messageId, userId, emoji]);
+            // Fetch updated reactions to emit
+            const updatedReactions = await DBConnection_1.default.query(`
+          SELECT * FROM message_reactions WHERE "messageId" = $1
+      `, [messageId]);
+            (0, SocketEmits_1.emitReactionUpdate)(chatId, messageId, updatedReactions.rows);
             res.status(201).json({
                 success: true,
                 message: 'Reaction added',

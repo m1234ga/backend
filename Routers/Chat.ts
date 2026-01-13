@@ -1195,7 +1195,7 @@ router.post('/api/ReplyToMessage', async (req: Request, res: Response) => {
 // Add reaction to message endpoint
 router.post('/api/AddReaction', async (req: Request, res: Response) => {
   try {
-    const { messageId, userId, emoji } = req.body;
+    const { messageId, userId, emoji, phone } = req.body;
 
     if (!messageId || !userId || !emoji) {
       return res.status(400).json({ error: 'messageId, userId, and emoji are required' });
@@ -1215,11 +1215,12 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Message not found' });
     }
     const chatId = msgRes.rows[0].chatId;
+    const targetId = phone || chatId;
 
     if (existingReaction.rows.length > 0) {
       // Remove existing reaction
       // Send removal to WhatsApp (empty string)
-      await messageSender.sendReaction(chatId, messageId, "");
+      await messageSender.sendReaction(targetId, messageId, "");
 
       await pool.query(`
         DELETE FROM message_reactions 
@@ -1236,7 +1237,7 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
     } else {
       // Add new reaction
       // Send reaction to WhatsApp
-      await messageSender.sendReaction(chatId, messageId, emoji);
+      await messageSender.sendReaction(targetId, messageId, emoji);
 
       const reactionId = Date.now().toString();
       const result = await pool.query(`

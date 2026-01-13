@@ -96,7 +96,7 @@ async function MessageSender() {
             undefined, true // isFromMe
             );
             // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'text');
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'text', undefined, currentUser?.id);
             if (savedMsg) {
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
                 // Emit update to confirm the message was sent and replace the optimistically added message
@@ -193,7 +193,7 @@ async function MessageSender() {
             // Determine the relative media path using the original filename from Multer
             const mediaPath = `imgs/${imageFile.filename}`;
             // Save message to database with the original filename
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image', mediaPath);
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'image', mediaPath, currentUser?.id);
             if (savedMsg) {
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
                 // Emit update to confirm the message was sent and provide the correct media path
@@ -288,7 +288,7 @@ async function MessageSender() {
             // Determine the relative media path using the original filename from Multer
             const mediaPath = `Video/${videoFile.filename}`;
             // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath);
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'video', mediaPath, currentUser?.id);
             if (savedMsg) {
                 const tempId = message.id;
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
@@ -553,7 +553,7 @@ async function MessageSender() {
             // Determine the relative media path using the original filename from Multer
             const mediaPath = `Audio/${audioFile.filename}`;
             // Save message to database
-            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath);
+            const savedMsg = await (0, DBHelper_1.default)().upsertMessage(dbMessageObject, message.chatId, 'audio', mediaPath, currentUser?.id);
             if (savedMsg) {
                 (0, SocketEmits_1.emitNewMessage)({ ...savedMsg, tempId });
                 // Emit update to confirm the message was sent and provide the correct media path
@@ -637,18 +637,89 @@ async function MessageSender() {
             };
         }
     }
+    async function sendReaction(chatId, messageId, emoji) {
+        try {
+            if (!chatId || !messageId) {
+                return {
+                    success: false,
+                    error: 'Missing required fields: chatId and messageId are required',
+                };
+            }
+            // If emoji is empty string, it means remove reaction
+            const reactionBody = emoji || "";
+            const response = await fetch(process.env.WUZAPI + '/chat/send/reaction', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    token: process.env.WUZAPI_Token || "",
+                },
+                body: JSON.stringify({
+                    Phone: chatId,
+                    Body: reactionBody,
+                    Id: messageId
+                }),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('WhatsApp API error (reaction):', response.status, errorText);
+                return {
+                    success: false,
+                    error: 'Failed to send reaction via WhatsApp API',
+                    details: errorText,
+                };
+            }
+            const result = await response.json();
+            return {
+                success: true,
+                message: 'Reaction sent successfully',
+                data: result
+            };
+        }
+        catch (error) {
+            console.error('Error in sendReaction:', error);
+            return {
+                success: false,
+                error: 'Internal server error',
+                details: error instanceof Error ? error.message : 'Unknown error',
+            };
+        }
+    }
     return {
         sendMessage,
         sendVideo,
         sendImage,
         sendAudio,
-        createMessageTemplate
+        createMessageTemplate,
+        sendReaction
     };
 }
 // Build WhatsApp-like forward context when requested by caller
 function buildForwardContext(message) {
     const ctx = (message && message.forwardContext) || message?.contextInfo;
     if (!ctx) {
+        // If no context provided but replyToMessage exists, try to build it for reply functionality
+        if (message?.replyToMessage) {
+            const reply = message.replyToMessage;
+            let participant = reply.ContactId || reply.participant;
+            // Ensure participant has domain
+            if (participant && !participant.includes('@')) {
+                participant = `${participant}@s.whatsapp.net`;
+            }
+            else if (!participant && reply.phone) {
+                participant = `${reply.phone}@s.whatsapp.net`;
+            }
+            // Construct basic QuotedMessage
+            // Note: Ideally this should match the type of the replied message (imageMessage, etc.)
+            // For now default to conversation (text)
+            const quotedMessage = { conversation: reply.message || '' };
+            return {
+                StanzaId: reply.id,
+                Participant: participant || '',
+                QuotedMessage: quotedMessage,
+                IsForwarded: false,
+                MentionedJID: []
+            };
+        }
         return {};
     }
     const phone = message?.phone || '';
@@ -658,10 +729,13 @@ function buildForwardContext(message) {
     const isForwarded = typeof ctx.IsForwarded === 'boolean'
         ? ctx.IsForwarded
         : (ctx.isForwarded === true);
+    // Extract QuotedMessage if present (for replies)
+    const quotedMessage = ctx.QuotedMessage || ctx.quotedMessage;
     return {
         StanzaId: stanzaId,
         Participant: participant,
         IsForwarded: !!isForwarded,
         MentionedJID: Array.isArray(mentioned) ? mentioned : [],
+        ...(quotedMessage ? { QuotedMessage: quotedMessage } : {})
     };
 }
