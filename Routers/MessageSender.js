@@ -647,7 +647,7 @@ async function MessageSender() {
             }
             // If emoji is empty string, it means remove reaction
             const reactionBody = emoji || "";
-            const response = await fetch(process.env.WUZAPI + '/chat/send/reaction', {
+            const response = await fetch(process.env.WUZAPI + '/chat/react', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -657,7 +657,7 @@ async function MessageSender() {
                     Phone: chatId,
                     Body: reactionBody,
                     Id: messageId
-                }),
+                })
             });
             if (!response.ok) {
                 const errorText = await response.text();
@@ -699,8 +699,9 @@ function buildForwardContext(message) {
     if (!ctx) {
         // If no context provided but replyToMessage exists, try to build it for reply functionality
         if (message?.replyToMessage) {
+            console.log('Building forward context for reply message:', message.forwardContext, message);
             const reply = message.replyToMessage;
-            let participant = reply.ContactId || reply.participant;
+            let participant = message.phone;
             // Ensure participant has domain
             if (participant && !participant.includes('@')) {
                 participant = `${participant}@s.whatsapp.net`;
@@ -708,10 +709,30 @@ function buildForwardContext(message) {
             else if (!participant && reply.phone) {
                 participant = `${reply.phone}@s.whatsapp.net`;
             }
-            // Construct basic QuotedMessage
-            // Note: Ideally this should match the type of the replied message (imageMessage, etc.)
-            // For now default to conversation (text)
-            const quotedMessage = { conversation: reply.message || '' };
+            // Construct QuotedMessage based on the replied message type
+            let quotedMessage = { conversation: reply.message || '' };
+            const msgType = reply.messageType || 'text';
+            if (msgType === 'image') {
+                quotedMessage = {
+                    imageMessage: {
+                        caption: reply.message || ''
+                    }
+                };
+            }
+            else if (msgType === 'video') {
+                quotedMessage = {
+                    videoMessage: {
+                        caption: reply.message || ''
+                    }
+                };
+            }
+            else if (msgType === 'audio') {
+                quotedMessage = {
+                    audioMessage: {
+                        seconds: reply.seconds || 0
+                    }
+                };
+            }
             return {
                 StanzaId: reply.id,
                 Participant: participant || '',
