@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = MessageSender;
 const uuid_1 = require("uuid");
 const SocketEmits_1 = require("../SocketEmits");
-const DBConnection_1 = __importDefault(require("../DBConnection"));
+const prismaClient_1 = __importDefault(require("../prismaClient"));
 const fs_1 = __importDefault(require("fs"));
 const DBHelper_1 = __importDefault(require("../DBHelper"));
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
@@ -31,7 +31,7 @@ catch (err) {
 }
 async function MessageSender() {
     // Helper function to create message object in database format
-    function createMessageObject(messageId, message, messageType, content, timestamp) {
+    function createMessageObject(messageId, message, messageType, content, timestamp, replyToMessageId) {
         return {
             Info: {
                 ID: messageId,
@@ -39,7 +39,8 @@ async function MessageSender() {
                 Timestamp: timestamp.toISOString(),
                 IsFromMe: true,
                 isEdit: false,
-                Sender: 'Me'
+                Sender: 'Me',
+                replyToMessageId: replyToMessageId || message.replyToMessageId
             },
             Message: {
                 conversation: content,
@@ -52,6 +53,7 @@ async function MessageSender() {
     }
     async function sendMessage(message, currentUser) {
         try {
+            console.log('MessageSender.sendMessage - replyToMessageId:', message.replyToMessageId);
             if (!message || !message.phone) {
                 return {
                     success: false,
@@ -87,7 +89,7 @@ async function MessageSender() {
             // Store the temp ID from the original message (sent from frontend)
             const tempId = message.id;
             // Save message to database
-            const dbMessageObject = createMessageObject(messageId, message ?? "", 'text', message.message, timestamp);
+            const dbMessageObject = createMessageObject(messageId, message ?? "", 'text', message.message, timestamp, message.replyToMessageId);
             // Save chat to database
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message, timestamp, 0, // unreadCount
             false, // isOnline
@@ -103,7 +105,7 @@ async function MessageSender() {
                 (0, SocketEmits_1.emitMessageUpdate)({
                     id: savedMsg.id,
                     tempId,
-                    timestamp: savedMsg.timestamp || timestamp.toISOString(),
+                    timestamp: savedMsg.timeStamp || timestamp.toISOString(),
                     timeStamp: savedMsg.timeStamp || timestamp,
                     chatId: savedMsg.chatId,
                     messageType: 'text',
@@ -182,7 +184,7 @@ async function MessageSender() {
             // Store the temp ID from the original message (sent from frontend)
             const tempId = message.id;
             // Save message to database
-            const dbMessageObject = createMessageObject(messageId, message, 'image', message.message || '[Image]', timestamp);
+            const dbMessageObject = createMessageObject(messageId, message, 'image', message.message || '[Image]', timestamp, message.replyToMessageId);
             // Save chat to database
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message || '[Image]', timestamp, 0, // unreadCount
             false, // isOnline
@@ -277,7 +279,7 @@ async function MessageSender() {
             const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(rawTimestamp);
             const isoTimestamp = timestamp.toISOString();
             // Save message to database
-            const dbMessageObject = createMessageObject(messageId, message, 'video', message.message || '[Video]', timestamp);
+            const dbMessageObject = createMessageObject(messageId, message, 'video', message.message || '[Video]', timestamp, message.replyToMessageId);
             // Save chat to database
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, message.message || '[Video]', timestamp, 0, // unreadCount
             false, // isOnline
@@ -542,7 +544,7 @@ async function MessageSender() {
             // Store the temp ID from the original message (sent from frontend)
             const tempId = message.id;
             // Save message to database - keep readable label in message, not filename
-            const dbMessageObject = createMessageObject(messageId, message, 'audio', '[Audio]', timestamp);
+            const dbMessageObject = createMessageObject(messageId, message, 'audio', '[Audio]', timestamp, message.replyToMessageId);
             // Save chat to database
             const chatResult = await (0, DBHelper_1.default)().upsertChat(message.chatId, '[Audio]', timestamp, 0, // unreadCount
             false, // isOnline
@@ -595,37 +597,19 @@ async function MessageSender() {
                     error: 'Missing required fields: name, content, and createdBy are required',
                 };
             }
-            // Ensure table exists first
-            await DBConnection_1.default.query(`
-        CREATE TABLE IF NOT EXISTS "messageTemplates" (
-          id SERIAL PRIMARY KEY,
-          name VARCHAR(255) NOT NULL,
-          content TEXT NOT NULL,
-          "createdBy" VARCHAR(255) NOT NULL,
-          "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          "imagePath" TEXT,
-          "mediaPath" TEXT
-        )
-      `);
-            // Ensure both columns exist for backward compatibility
-            await DBConnection_1.default.query(`ALTER TABLE "messageTemplates" ADD COLUMN IF NOT EXISTS "imagePath" TEXT`);
-            await DBConnection_1.default.query(`ALTER TABLE "messageTemplates" ADD COLUMN IF NOT EXISTS "mediaPath" TEXT`);
-            const result = await DBConnection_1.default.query(`
-        INSERT INTO "messageTemplates" (name, content, "createdBy", "imagePath", "mediaPath") 
-        VALUES ($1, $2, $3, $4, $5) 
-        RETURNING *
-      `, [name, content, createdBy, imagePath || null, mediaPath || null]);
-            if (result.rows.length === 0) {
-                return {
-                    success: false,
-                    error: 'Failed to create message template',
-                };
-            }
+            const result = await prismaClient_1.default.messageTemplates.create({
+                data: {
+                    name,
+                    content,
+                    createdBy,
+                    imagePath: imagePath || null,
+                    mediaPath: mediaPath || null,
+                },
+            });
             return {
                 success: true,
                 message: 'Message template created successfully',
-                data: result.rows[0],
+                data: result,
             };
         }
         catch (error) {
@@ -637,7 +621,7 @@ async function MessageSender() {
             };
         }
     }
-    async function sendReaction(chatId, messageId, emoji) {
+    async function sendReaction(chatId, messageId, emoji, isOwnMessage = false) {
         try {
             if (!chatId || !messageId) {
                 return {
@@ -647,6 +631,7 @@ async function MessageSender() {
             }
             // If emoji is empty string, it means remove reaction
             const reactionBody = emoji || "";
+            const targetPhone = isOwnMessage ? `me:${chatId}` : chatId;
             const response = await fetch(process.env.WUZAPI + '/chat/react', {
                 method: 'POST',
                 headers: {
@@ -654,7 +639,7 @@ async function MessageSender() {
                     token: process.env.WUZAPI_Token || "",
                 },
                 body: JSON.stringify({
-                    Phone: chatId,
+                    Phone: targetPhone,
                     Body: reactionBody,
                     Id: messageId
                 })

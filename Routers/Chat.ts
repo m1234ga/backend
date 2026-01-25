@@ -226,10 +226,31 @@ router.get('/api/GetMessages/:id', async (req, res) => {
       if (before) {
         // Get messages before the specified timestamp (for pagination) with pushName from chats
         result = await pool.query(
-          `SELECT m.*, name as "pushName" 
+          `SELECT m.*, name as "pushName",
+          CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
+            json_build_object(
+              'id', reply.id,
+              'message', reply.message,
+              'isFromMe', reply."isFromMe",
+              'pushName', reply."pushname",
+              'contactId', reply."contactId",
+              'mediaPath', reply."mediaPath"
+            )
+          ELSE NULL END as "replyToMessage",
+          (
+            SELECT json_agg(json_build_object(
+              'emoji', mr.emoji,
+              'participant', mr.participant,
+              'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
+            ))
+            FROM message_reactions mr
+            LEFT JOIN cleaned_contacts cc ON SPLIT_PART(mr.participant, '@', 1) = cc.phone
+            WHERE mr."messageId" = m.id
+          ) as reactions
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
                    LEFT JOIN chatsInfo ci ON ci.id = m."chatId"
+                   LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
           [id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit]
@@ -237,9 +258,30 @@ router.get('/api/GetMessages/:id', async (req, res) => {
       } else {
         // Get last N messages (initial load) with pushName from chats
         result = await pool.query(
-          `SELECT m.*, c.pushname as "pushName" 
+          `SELECT m.*, c.pushname as "pushName",
+          CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
+            json_build_object(
+              'id', reply.id,
+              'message', reply.message,
+              'isFromMe', reply."isFromMe",
+              'pushName', reply."pushname",
+              'contactId', reply."contactId",
+              'mediaPath', reply."mediaPath"
+            )
+          ELSE NULL END as "replyToMessage",
+          (
+            SELECT json_agg(json_build_object(
+              'emoji', mr.emoji,
+              'participant', mr.participant,
+              'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
+            ))
+            FROM message_reactions mr
+            LEFT JOIN cleaned_contacts cc ON SPLIT_PART(mr.participant, '@', 1) = cc.phone
+            WHERE mr."messageId" = m.id
+          ) as reactions
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id 
+                   LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
                    WHERE m."chatId" = $1 
                    ORDER BY m."timeStamp" DESC LIMIT $2`,
           [id, limit]
@@ -247,9 +289,20 @@ router.get('/api/GetMessages/:id', async (req, res) => {
       }
     } else {
       result = await pool.query(`
-              SELECT m.*, c.pushname as "pushName" 
+              SELECT m.*, c.pushname as "pushName",
+              CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
+                json_build_object(
+                  'id', reply.id,
+                  'message', reply.message,
+                  'isFromMe', reply."isFromMe",
+                  'pushName', reply."pushname",
+                  'contactId', reply."contactId",
+                  'mediaPath', reply."mediaPath"
+                )
+              ELSE NULL END as "replyToMessage"
               FROM messages m 
               LEFT JOIN chats c ON m."chatId" = c.id
+              LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
           `);
     }
 
@@ -264,7 +317,7 @@ router.get('/api/GetMessages/:id', async (req, res) => {
 router.post('/api/sendImage', upload.single('image'), async (req: any, res: Response) => {
   try {
     const messageSender = await messageSenderRouter();
-    const { phone, message } = req.body;
+    const { phone, message, replyToId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
@@ -282,7 +335,8 @@ router.post('/api/sendImage', upload.single('image'), async (req: any, res: Resp
       isRead: false,
       isDelivered: false,
       isFromMe: true,
-      phone: phone
+      phone: phone,
+      replyToMessageId: replyToId
     };
 
     const result = await messageSender.sendImage(chatMessage, req.file);
@@ -296,7 +350,7 @@ router.post('/api/sendImage', upload.single('image'), async (req: any, res: Resp
 router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Response) => {
   try {
     const messageSender = await messageSenderRouter();
-    const { phone, message } = req.body;
+    const { phone, message, replyToId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
@@ -314,7 +368,8 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
       isRead: false,
       isDelivered: false,
       isFromMe: true,
-      phone: phone
+      phone: phone,
+      replyToMessageId: replyToId
     };
 
     const result = await messageSender.sendVideo(chatMessage, req.file);
@@ -328,7 +383,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
 router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Response) => {
   try {
     const messageSender = await messageSenderRouter();
-    const { phone, audioData, mimeType = 'audio/ogg', seconds, waveform, id } = req.body;
+    const { phone, audioData, mimeType = 'audio/ogg', seconds, waveform, id, replyToId } = req.body;
 
     // Handle both file upload and base64 data
     let audioFile;
@@ -382,7 +437,8 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
       isFromMe: true,
       phone: phone,
       seconds: seconds ? parseInt(seconds.toString()) : 0,
-      waveform: typeof waveform === 'string' ? JSON.parse(waveform) : (Array.isArray(waveform) ? waveform : [])
+      waveform: typeof waveform === 'string' ? JSON.parse(waveform) : (Array.isArray(waveform) ? waveform : []),
+      replyToMessageId: replyToId
     };
 
     const result = await messageSender.sendAudio(chatMessage, audioFile);
@@ -1209,18 +1265,18 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
 
     const messageSender = await messageSenderRouter();
 
-    // Get chatId from messages table
-    const msgRes = await pool.query('SELECT "chatId" FROM messages WHERE id = $1', [messageId]);
+    // Get message info to check if it's our own message
+    const msgRes = await pool.query('SELECT "chatId", "isFromMe" FROM messages WHERE id = $1', [messageId]);
     if (msgRes.rows.length === 0) {
       return res.status(404).json({ error: 'Message not found' });
     }
-    const chatId = msgRes.rows[0].chatId;
+    const { chatId, isFromMe } = msgRes.rows[0];
     const targetId = phone || chatId;
 
     if (existingReaction.rows.length > 0) {
       // Remove existing reaction
       // Send removal to WhatsApp (empty string)
-      await messageSender.sendReaction(targetId, messageId, "");
+      await messageSender.sendReaction(targetId, messageId, "", isFromMe);
 
       await pool.query(`
         DELETE FROM message_reactions 
@@ -1237,7 +1293,7 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
     } else {
       // Add new reaction
       // Send reaction to WhatsApp
-      await messageSender.sendReaction(targetId, messageId, emoji);
+      await messageSender.sendReaction(targetId, messageId, emoji, isFromMe);
 
       const reactionId = Date.now().toString();
       const result = await pool.query(`

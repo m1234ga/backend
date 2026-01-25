@@ -1,0 +1,407 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres:q@localhost:5432/wuzapi?schema=public"
+}
+
+model app_users {
+  id            String    @id @db.Uuid
+  username      String    @unique @db.VarChar(255)
+  email         String    @unique @db.VarChar(255)
+  password_hash String    @db.VarChar(255)
+  first_name    String?   @db.VarChar(255)
+  last_name     String?   @db.VarChar(255)
+  role          String?   @default("user") @db.VarChar(50)
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+  is_active     Boolean?  @default(true)
+}
+
+model chatAssignmentDetail {
+  chatId                 String?   @db.VarChar(50)
+  assignedTo             String?   @db.VarChar(50)
+  assignedBy             String?   @db.VarChar(50)
+  chatAssignmentDetailId BigInt    @id(map: "ChatAssignmentDetail_pkey") @default(autoincrement())
+  assignedAt             DateTime? @db.Timestamptz(6)
+
+  @@unique([chatId, assignedTo], map: "chat_assignment_unique")
+}
+
+model chatTags {
+  tagId        BigInt    @default(autoincrement())
+  chatTagId    BigInt    @id(map: "Pkey") @default(autoincrement())
+  chatId       String?   @db.VarChar(50)
+  creationDate DateTime? @db.Date
+  createdBy    String?
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model chat_status_details {
+  id         Int       @id @default(autoincrement())
+  chat_id    String    @db.VarChar(255)
+  status     String    @db.VarChar(20)
+  changed_by String?   @db.VarChar(255)
+  changed_at DateTime? @default(now()) @db.Timestamp(6)
+  reason     String?
+  notes      String?
+  chats      chats     @relation(fields: [chat_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([changed_at], map: "idx_chat_status_details_changed_at")
+  @@index([chat_id], map: "idx_chat_status_details_chat_id")
+  @@index([status], map: "idx_chat_status_details_status")
+}
+
+model chatparticipants {
+  chatid    String   @db.VarChar(50)
+  contactid String   @db.VarChar(50)
+  chats     chats    @relation(fields: [chatid], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contacts  contacts @relation(fields: [contactid], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([chatid, contactid])
+}
+
+model chats {
+  id                  String                @id @db.VarChar(100)
+  lastMessage         String?
+  lastMessageTime     DateTime?             @db.Timestamp(6)
+  unReadCount         Int?                  @default(0)
+  isOnline            Boolean?              @default(false)
+  contactId           String?               @db.VarChar(50)
+  isTyping            String?               @db.Bit(1)
+  userId              String?               @db.VarChar(50)
+  pushname            String?
+  assignedTo          String?               @db.VarChar(50)
+  isarchived          Boolean?              @default(false)
+  ismuted             Boolean?              @default(false)
+  status              String?
+  closedAt            DateTime?             @db.Time(6)
+  closeReason         String?
+  participants        Json?                 @default("[]")
+  avatar              String?
+  isPinned            Boolean?
+  chat_status_details chat_status_details[]
+  chatparticipants    chatparticipants[]
+  messages            messages[]
+}
+
+model cleaned_contacts {
+  phone         String  @id
+  first_name    String?
+  full_name     String?
+  push_name     String?
+  business_name String?
+}
+
+model contacts {
+  id               String             @id @db.VarChar(50)
+  name             String
+  phone            String?            @db.VarChar(50)
+  email            String?            @db.VarChar(255)
+  address          String?            @db.VarChar(255)
+  city             String?            @db.VarChar(100)
+  state            String?            @db.VarChar(100)
+  zip              String?            @db.VarChar(20)
+  country          String?            @db.VarChar(100)
+  lastMessage      String?
+  lastMessageTime  DateTime?          @db.Timestamp(6)
+  unReadCount      Int?               @default(0)
+  isTyping         Boolean?           @default(false)
+  isOnline         Boolean?           @default(false)
+  image            String?
+  lastSeen         DateTime?          @db.Timestamp(6)
+  chatId           String?            @db.VarChar(100)
+  contactId        String?            @db.VarChar(50)
+  userId           String?            @db.VarChar(50)
+  tags             Json?              @default("[]")
+  chatparticipants chatparticipants[]
+}
+
+model conversations {
+  id         Int       @id @default(autoincrement())
+  name       String?   @db.VarChar(100)
+  is_group   Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model groups {
+  id   String  @id
+  name String?
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model messageTemplates {
+  id        Int       @id @default(autoincrement())
+  name      String    @db.VarChar(255)
+  content   String
+  createdBy String    @db.VarChar(255)
+  createdAt DateTime? @default(now()) @db.Timestamp(6)
+  updatedat DateTime? @default(now()) @db.Timestamp(6)
+  imagePath String?
+  mediaPath String?
+}
+
+model message_history {
+  id                Int      @id @default(autoincrement())
+  user_id           String
+  chat_jid          String
+  sender_jid        String
+  message_id        String
+  timestamp         DateTime @db.Timestamp(6)
+  message_type      String
+  text_content      String?
+  media_link        String?
+  quoted_message_id String?
+  datajson          String?
+
+  @@unique([user_id, message_id])
+  @@index([user_id, chat_jid, timestamp(sort: Desc)], map: "idx_message_history_user_chat_timestamp")
+}
+
+model message_reactions {
+  messageId   String
+  participant String?
+  emoji       String
+  createdAt   DateTime? @default(now()) @db.Timestamp(6)
+  userId      String?   @db.VarChar(50)
+  id          String    @id(map: "id") @db.VarChar(50)
+  messages    messages  @relation(fields: [messageId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_message_reactions_message")
+
+  @@unique([messageId, participant], map: "unique_reaction_per_user_message")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model messages {
+  id                String              @id(map: "chatmessages_pkey") @db.VarChar(50)
+  chatId            String?             @db.VarChar(50)
+  message           String
+  timeStamp         DateTime?           @default(now()) @db.Timestamp(6)
+  isDelivered       Boolean?            @default(false)
+  isRead            Boolean?            @default(false)
+  messageType       String?
+  isFromMe          Boolean?
+  contactId         String?             @db.VarChar(50)
+  isEdit            Boolean?
+  pushname          String?
+  mediaPath         String?
+  note              String?
+  isPinned          Boolean?
+  userId            String?
+  replyToMessageId  String?             @db.VarChar(50)
+  message_reactions message_reactions[]
+  chats             chats?              @relation(fields: [chatId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "chatmessages_chatid_fkey")
+}
+
+model migrations {
+  id         Int       @id
+  name       String
+  applied_at DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model tags {
+  tagId   BigInt  @id @default(autoincrement())
+  tagName String?
+}
+
+model users {
+  id                String   @id
+  name              String
+  token             String
+  webhook           String   @default("")
+  jid               String   @default("")
+  qrcode            String   @default("")
+  connected         Int?
+  expiration        Int?
+  events            String   @default("")
+  proxy_url         String?  @default("")
+  s3_enabled        Boolean? @default(false)
+  s3_endpoint       String?  @default("")
+  s3_region         String?  @default("")
+  s3_bucket         String?  @default("")
+  s3_access_key     String?  @default("")
+  s3_secret_key     String?  @default("")
+  s3_path_style     Boolean? @default(true)
+  s3_public_url     String?  @default("")
+  media_delivery    String?  @default("base64")
+  s3_retention_days Int?     @default(30)
+  history           Int?     @default(0)
+  hmac_key          Bytes?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_app_state_mutation_macs {
+  jid                         String
+  name                        String
+  version                     BigInt
+  index_mac                   Bytes
+  value_mac                   Bytes
+  whatsmeow_app_state_version whatsmeow_app_state_version @relation(fields: [jid, name], references: [jid, name], onDelete: Cascade)
+
+  @@id([jid, name, version, index_mac])
+}
+
+model whatsmeow_app_state_sync_keys {
+  jid              String
+  key_id           Bytes
+  key_data         Bytes
+  timestamp        BigInt
+  fingerprint      Bytes
+  whatsmeow_device whatsmeow_device @relation(fields: [jid], references: [jid], onDelete: Cascade)
+
+  @@id([jid, key_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_app_state_version {
+  jid                               String
+  name                              String
+  version                           BigInt
+  hash                              Bytes
+  whatsmeow_app_state_mutation_macs whatsmeow_app_state_mutation_macs[]
+  whatsmeow_device                  whatsmeow_device                    @relation(fields: [jid], references: [jid], onDelete: Cascade)
+
+  @@id([jid, name])
+}
+
+model whatsmeow_chat_settings {
+  our_jid          String
+  chat_jid         String
+  muted_until      BigInt           @default(0)
+  pinned           Boolean          @default(false)
+  archived         Boolean          @default(false)
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, chat_jid])
+}
+
+model whatsmeow_contacts {
+  our_jid          String
+  their_jid        String
+  first_name       String?
+  full_name        String?
+  push_name        String?
+  business_name    String?
+  redacted_phone   String?
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, their_jid])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_device {
+  jid                           String                          @id
+  lid                           String?
+  facebook_uuid                 String?                         @db.Uuid
+  registration_id               BigInt
+  noise_key                     Bytes
+  identity_key                  Bytes
+  signed_pre_key                Bytes
+  signed_pre_key_id             Int
+  signed_pre_key_sig            Bytes
+  adv_key                       Bytes
+  adv_details                   Bytes
+  adv_account_sig               Bytes
+  adv_account_sig_key           Bytes
+  adv_device_sig                Bytes
+  platform                      String                          @default("")
+  business_name                 String                          @default("")
+  push_name                     String                          @default("")
+  lid_migration_ts              BigInt                          @default(0)
+  whatsmeow_app_state_sync_keys whatsmeow_app_state_sync_keys[]
+  whatsmeow_app_state_version   whatsmeow_app_state_version[]
+  whatsmeow_chat_settings       whatsmeow_chat_settings[]
+  whatsmeow_contacts            whatsmeow_contacts[]
+  whatsmeow_event_buffer        whatsmeow_event_buffer[]
+  whatsmeow_identity_keys       whatsmeow_identity_keys[]
+  whatsmeow_message_secrets     whatsmeow_message_secrets[]
+  whatsmeow_pre_keys            whatsmeow_pre_keys[]
+  whatsmeow_sender_keys         whatsmeow_sender_keys[]
+  whatsmeow_sessions            whatsmeow_sessions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_event_buffer {
+  our_jid          String
+  ciphertext_hash  Bytes
+  plaintext        Bytes?
+  server_timestamp BigInt
+  insert_timestamp BigInt
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, ciphertext_hash])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_identity_keys {
+  our_jid          String
+  their_id         String
+  identity         Bytes
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, their_id])
+}
+
+model whatsmeow_lid_map {
+  lid String @id
+  pn  String @unique
+}
+
+model whatsmeow_message_secrets {
+  our_jid          String
+  chat_jid         String
+  sender_jid       String
+  message_id       String
+  key              Bytes
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, chat_jid, sender_jid, message_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model whatsmeow_pre_keys {
+  jid              String
+  key_id           Int
+  key              Bytes
+  uploaded         Boolean
+  whatsmeow_device whatsmeow_device @relation(fields: [jid], references: [jid], onDelete: Cascade)
+
+  @@id([jid, key_id])
+}
+
+model whatsmeow_privacy_tokens {
+  our_jid   String
+  their_jid String
+  token     Bytes
+  timestamp BigInt
+
+  @@id([our_jid, their_jid])
+}
+
+model whatsmeow_sender_keys {
+  our_jid          String
+  chat_id          String
+  sender_id        String
+  sender_key       Bytes
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, chat_id, sender_id])
+}
+
+model whatsmeow_sessions {
+  our_jid          String
+  their_id         String
+  session          Bytes?
+  whatsmeow_device whatsmeow_device @relation(fields: [our_jid], references: [jid], onDelete: Cascade)
+
+  @@id([our_jid, their_id])
+}
+
+/// The underlying table does not contain a valid unique identifier and can therefore currently not be handled by Prisma Client.
+model whatsmeow_version {
+  version Int?
+  compat  Int?
+
+  @@ignore
+}

@@ -78,6 +78,7 @@ function initializeSocketIO(server) {
         });
         socket.on('send_message', async (message) => {
             try {
+                console.log('Received message via Socket.IO:', message.id, 'ReplyTo:', message.replyToMessageId);
                 console.log('Received message via Socket.IO:', message);
                 // Send message via WuzAPI (MessageSender handles DB insertion and socket emits)
                 const currentUser = {

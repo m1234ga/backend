@@ -1,55 +1,32 @@
-import pool from "./DBConnection";
+import prisma from "./prismaClient";
 
 type UpsertChatOptions = {
   status?: string;
   participants?: any[];
 };
 
-let ensureChatColumnsPromise: Promise<void> | null = null;
-
+// Kept for compatibility but performs no operation as Prisma manages schema
 async function ensureChatColumns() {
-  if (!ensureChatColumnsPromise) {
-    ensureChatColumnsPromise = (async () => {
-      try {
-        await pool.query(
-          `ALTER TABLE chats ADD COLUMN IF NOT EXISTS participants JSONB DEFAULT '[]'::jsonb`
-        );
-        await pool.query(
-          `ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar TEXT`
-        );
-        await pool.query(
-          `ALTER TABLE chats ADD COLUMN IF NOT EXISTS "closeReason" TEXT`
-        );
-        await pool.query(
-          `ALTER TABLE messages ADD COLUMN IF NOT EXISTS "userId" TEXT`
-        );
-      } catch (error) {
-        console.error(
-          "Failed to ensure columns on chats table:",
-          error
-        );
-      }
-    })();
-  }
-  return ensureChatColumnsPromise;
+  return Promise.resolve();
 }
 
 function DBHelper() {
   async function GetUser(token: string) {
-    const res = await pool.query(
-      "SELECT * FROM USERS WHERE name='" + token + "'"
-    );
-    if (res.rows.length === 0) {
+    const user = await prisma.users.findFirst({
+      where: { name: token },
+    });
+    if (!user) {
       console.warn(`GetUser: User not found for token/name: ${token}`);
       return null;
     }
-    return res.rows[0].jid ? res.rows[0].jid.split(":")[0] : null;
+    return user.jid ? user.jid.split(":")[0] : null;
   }
+
   async function upsertChat(
     id: string,
     lastMessage: string,
     lastMessageTime: Date,
-    unreadCount: number,
+    unreadCount: number | null | undefined,
     isOnline: boolean,
     isTyping: boolean,
     pushname: string,
@@ -58,7 +35,6 @@ function DBHelper() {
     statusOrOptions?: string | UpsertChatOptions | any[],
     isFromMe: boolean = false
   ) {
-    await ensureChatColumns();
     const normalizedOptions = normalizeUpsertOptions(statusOrOptions);
     const status = normalizedOptions.status || "open";
     const participants =
@@ -66,60 +42,96 @@ function DBHelper() {
         Array.isArray(normalizedOptions.participants)
         ? normalizedOptions.participants
         : undefined;
-    const hasParticipants = Array.isArray(participants);
 
-    const query = `
-        INSERT INTO chats (
-          id, "lastMessage", "lastMessageTime", "unReadCount", "isOnline", "isTyping", "pushname", "contactId", "userId", "status", participants
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, CAST($11 AS jsonb))
-        ON CONFLICT (id) 
-        DO UPDATE SET
-          "lastMessage"     = EXCLUDED."lastMessage",
-          "lastMessageTime" = EXCLUDED."lastMessageTime",
-          "unReadCount"     = CASE 
-                                WHEN EXCLUDED."unReadCount" IS NOT NULL THEN EXCLUDED."unReadCount"
-                                WHEN $13 = FALSE THEN COALESCE(chats."unReadCount", 0) + 1
-                                ELSE COALESCE(chats."unReadCount", 0)
-                              END,
-          "isOnline"        = EXCLUDED."isOnline",
-          "isTyping"        = EXCLUDED."isTyping",
-          "pushname"        = CASE 
-                                WHEN EXCLUDED."pushname" IS NOT NULL AND EXCLUDED."pushname" <> '' AND $13 = FALSE 
-                                THEN EXCLUDED."pushname" 
-                                ELSE chats."pushname" 
-                              END,
-          "contactId"       = EXCLUDED."contactId",
-          "userId"          = EXCLUDED."userId",
-          "status"          = COALESCE(EXCLUDED."status", chats."status", 'open'),
-          participants      = CASE WHEN $12 THEN EXCLUDED.participants ELSE chats.participants END
-        RETURNING *;
-      `;
+    // Prisma logic for complex Upsert
+    // We fetch first to handle the conditional logic for unReadCount and pushname
+    const existingChat = await prisma.chats.findUnique({
+      where: { id },
+    });
 
-    const values = [
-      id,
-      lastMessage,
-      lastMessageTime.toISOString(),
-      unreadCount,
-      isOnline ? 1 : 0,
-      isTyping ? 1 : 0,
-      pushname,
-      contactId,
-      userId,
-      status,
-      hasParticipants ? JSON.stringify(participants) : JSON.stringify([]),
-      hasParticipants,
-      isFromMe,
-    ];
+    const isTypingStr = isTyping ? "1" : "0";
+    const participantsVal = participants ? participants : (existingChat?.participants ?? []);
 
-    const result = await pool.query(query, values);
-    return result.rows;
+    if (existingChat) {
+      // Logic for unReadCount:
+      // If unreadCount arg is provided (not null/undefined), use it.
+      // Else if isFromMe is false, increment.
+      // Else keep existing.
+      let newUnReadCount = existingChat.unReadCount || 0;
+      if (unreadCount !== null && unreadCount !== undefined) {
+        newUnReadCount = unreadCount;
+      } else if (!isFromMe) {
+        newUnReadCount += 1;
+      }
+
+      // Logic for pushname:
+      // Update if passed, not empty, and not from me.
+      // SQL: WHEN EXCLUDED."pushname" IS NOT NULL AND EXCLUDED."pushname" <> '' AND $13 = FALSE
+      let newPushname = existingChat.pushname;
+      if (pushname && pushname !== "" && !isFromMe) {
+        newPushname = pushname;
+      }
+
+      const updated = await prisma.chats.update({
+        where: { id },
+        data: {
+          lastMessage,
+          lastMessageTime,
+          unReadCount: newUnReadCount,
+          isOnline: isOnline,
+          isTyping: isTypingStr,
+          pushname: newPushname,
+          contactId,
+          userId,
+          status: normalizedOptions.status || existingChat.status || "open",
+          participants: participantsVal as any, // Cast to any to satisfy InputJsonValue if needed
+        },
+      });
+      return [updated];
+    } else {
+      // Create new
+      const created = await prisma.chats.create({
+        data: {
+          id,
+          lastMessage,
+          lastMessageTime,
+          unReadCount:
+            unreadCount !== null && unreadCount !== undefined
+              ? unreadCount
+              : isFromMe
+                ? 0
+                : 1, // If not provided and creating, default logic? SQL default is 0. But if implicit increment applies on create?
+          // SQL INSERT VALUES used $4. If $4 was null, it would insert NULL?
+          // Table definition unReadCount Int? @default(0).
+          // If we pass NULL to create, it uses default? No, explicit null is null.
+          // I will assume if passed null/undefined, we start with 1 if not from me, 0 if from me.
+          isOnline,
+          isTyping: isTypingStr,
+          pushname,
+          contactId,
+          userId,
+          status,
+          participants: (participants || []) as any,
+        },
+      });
+      return [created];
+    }
   }
-  async function upsertMessage(message: any, chatId: string, type: string, passedMediaPath?: string, userId?: string) {
+
+  async function upsertMessage(
+    message: any,
+    chatId: string,
+    type: string,
+    passedMediaPath?: string,
+    userId?: string
+  ) {
     let content =
-      message.Message.conversation || message.Message.extendedTextMessage?.text || "";
+      message.Message.conversation ||
+      message.Message.extendedTextMessage?.text ||
+      "";
     var contactId = "";
-    let mediaPath: string | null = passedMediaPath || message.Info?.mediaPath || null;
+    let mediaPath: string | null =
+      passedMediaPath || message.Info?.mediaPath || null;
 
     if (!message.isFromMe) {
       contactId = (message.Info.Sender || "").match(/^[^@:]+/)?.[0] || "";
@@ -136,94 +148,143 @@ function DBHelper() {
       }
     }
 
-    const query = `
-          INSERT INTO messages (id,"chatId", message, "timeStamp", "isDelivered", "isRead","messageType","isFromMe","contactId","isEdit","mediaPath","userId")
-          VALUES ($1,$2, $3, $4, $5, $6, $7, $8,$9,$10,$11,$12)
-          ON CONFLICT (id)
-           DO UPDATE
-            SET message = EXCLUDED.message,
-            "timeStamp"=EXCLUDED."timeStamp",
-            "isDelivered" = EXCLUDED."isDelivered",
-            "isRead" = EXCLUDED."isRead",
-            "messageType"=EXCLUDED."messageType",
-            "isFromMe"=EXCLUDED."isFromMe",
-            "contactId"=EXCLUDED."contactId",
-            "isEdit"=EXCLUDED."isEdit",
-            "mediaPath"=EXCLUDED."mediaPath",
-            "userId"=EXCLUDED."userId"
-          RETURNING *;
-        `;
+    // Extract replyToMessageId from various possible locations in the message object
+    console.log('--- DB Upsert Message Debug ---');
+    console.log('Full Message Object:', JSON.stringify(message, null, 2));
+    console.log('Message ID:', message.Info?.ID);
+    console.log('Message Type:', type);
 
-    const values = [
-      message.Info.ID,
+    // Helper to find reply/quoted message ID recursively in an object
+    const findReplyId = (obj: any): string | null => {
+      if (!obj || typeof obj !== 'object') return null;
+      if (obj.stanzaId) return obj.stanzaId;
+      if (obj.StanzaId) return obj.StanzaId;
+      if (obj.quotedMessageId) return obj.quotedMessageId;
+      if (obj.QuotedMessageId) return obj.QuotedMessageId;
+      for (const key in obj) {
+        if (typeof obj[key] === 'object') {
+          const res = findReplyId(obj[key]);
+          if (res) return res;
+        }
+      }
+      return null;
+    };
+
+    // Check various paths for the reply/quoted message ID
+    const replyToMessageId =
+      message.Info?.replyToMessageId ||
+      message.Info?.replyToMessageID ||
+      message.replyToMessageId ||
+      message.forwardContext?.StanzaId ||
+      findReplyId(message.Message) ||
+      findReplyId(message) ||
+      null;
+
+    console.log('Identified replyToMessageId:', replyToMessageId);
+
+    const messageData = {
       chatId,
-      content,
-      new Date(message.Info.Timestamp).toISOString(),
-      false,
-      false,
-      type,
-      message.Info.IsFromMe,
+      message: content,
+      timeStamp: new Date(message.Info.Timestamp),
+      isDelivered: false,
+      isRead: false,
+      messageType: type,
+      isFromMe: message.Info.IsFromMe,
       contactId,
-      message.Info.isEdit,
+      isEdit: message.Info.isEdit || false, // Ensure boolean
       mediaPath,
-      userId || null
-    ];
+      userId: userId || null,
+      replyToMessageId,
+    };
+
     try {
-      const result = await pool.query(query, values);
-      console.log("Upserted message:", result.rows[0]);
-      return result.rows[0];
+      const result = await prisma.messages.upsert({
+        where: { id: message.Info.ID },
+        update: {
+          message: content,
+          timeStamp: new Date(message.Info.Timestamp),
+          isDelivered: false, // SQL updated these to EXCLUDED values which were defaulting to false?
+          // Wait, SQL VALUES ($5, $6) were false, false.
+          // UPDATE SET "isDelivered" = EXCLUDED."isDelivered" -> sets to false regardless?
+          // Yes, the original code resets isDelivered/isRead on update?
+          // Original SQL:
+          // VALUES (..., false, false, ...)
+          // UPDATE SET "isDelivered" = EXCLUDED."isDelivered"
+          // So yes, it seems it resets them.
+          isRead: false,
+          messageType: type,
+          isFromMe: message.Info.IsFromMe,
+          contactId,
+          isEdit: message.Info.isEdit || false,
+          mediaPath,
+          userId: userId || null,
+          replyToMessageId,
+        },
+        create: {
+          id: message.Info.ID,
+          ...messageData,
+        },
+      });
+      console.log("Upserted message:", result);
+      return result;
     } catch (err) {
       console.error("Error upserting message:", err);
       throw err;
     }
   }
+
   async function GetPhoneNum(chatId: string) {
-    const res = await pool.query(
-      "SELECT * FROM whatsmeow_lid_map WHERE lid='" + chatId + "'"
-    );
-    return res.rows[0].pn;
+    const res = await prisma.whatsmeow_lid_map.findUnique({
+      where: { lid: chatId },
+    });
+    return res?.pn;
   }
 
   async function upsertGroup(id: string, name: string) {
     try {
-      await pool.query(
-        `CREATE TABLE IF NOT EXISTS groups (
-          id TEXT PRIMARY KEY,
-          name TEXT
-        )`
-      );
-      const query = `
-        INSERT INTO groups (id, name)
-        VALUES ($1, $2)
-        ON CONFLICT (id) 
-        DO UPDATE SET name = EXCLUDED.name
-        RETURNING *;
-      `;
-      const result = await pool.query(query, [id, name]);
-      return result.rows[0];
+      // Prisma handles table creation via migrations, assuming table exists.
+      const result = await prisma.groups.upsert({
+        where: { id },
+        update: { name },
+        create: { id, name },
+      });
+      return result;
     } catch (error) {
       console.error("Error upserting group:", error);
       throw error;
     }
   }
 
-  async function updateMessageStatus(messageIds: string[], status: 'read' | 'delivered') {
+  async function updateMessageStatus(
+    messageIds: string[],
+    status: "read" | "delivered"
+  ) {
     if (!messageIds || messageIds.length === 0) return [];
 
-    const isRead = status === 'read';
-    const isDelivered = status === 'read' || status === 'delivered';
+    const isRead = status === "read";
+    const isDelivered = status === "read" || status === "delivered";
 
-    const query = `
-      UPDATE messages 
-      SET "isRead" = CASE WHEN $1 THEN TRUE ELSE "isRead" END,
-          "isDelivered" = CASE WHEN $2 THEN TRUE ELSE "isDelivered" END
-      WHERE id = ANY($3)
-      RETURNING *;
-    `;
+    const dataToUpdate: any = {};
+    if (isRead) dataToUpdate.isRead = true;
+    if (isDelivered) dataToUpdate.isDelivered = true;
 
     try {
-      const result = await pool.query(query, [isRead, isDelivered, messageIds]);
-      return result.rows;
+      // Prisma updateMany returns count, not rows.
+      // To emulate returning rows, we fetch them after update or try to find them.
+      // However, since we update by ID, we can fetch all with these IDs.
+      await prisma.messages.updateMany({
+        where: {
+          id: { in: messageIds },
+        },
+        data: dataToUpdate,
+      });
+
+      const updatedMessages = await prisma.messages.findMany({
+        where: {
+          id: { in: messageIds },
+        },
+      });
+      return updatedMessages;
     } catch (err) {
       console.error("Error updating message status:", err);
       throw err;

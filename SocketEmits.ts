@@ -105,6 +105,7 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
     socket.on('send_message', async (message: ChatMessage) => {
       try {
+        console.log('Received message via Socket.IO:', message.id, 'ReplyTo:', message.replyToMessageId);
         console.log('Received message via Socket.IO:', message);
 
         // Send message via WuzAPI (MessageSender handles DB insertion and socket emits)
