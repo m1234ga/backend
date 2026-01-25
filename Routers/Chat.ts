@@ -7,6 +7,7 @@ import messageSenderRouter from './MessageSender';
 
 import { emitChatUpdate, emitReactionUpdate } from '../SocketEmits';
 import { adjustToConfiguredTimezone } from '../utils/timezone';
+import prisma from '../prismaClient';
 
 const router = Router();
 
@@ -68,6 +69,16 @@ router.get('/api/GetContacts', async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching contacts:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.get('/api/GetCleanedContacts', async (req: Request, res: Response) => {
+  try {
+    const contacts = await prisma.cleaned_contacts.findMany();
+    res.json(contacts);
+  } catch (error) {
+    console.error('Error fetching cleaned contacts:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
