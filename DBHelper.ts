@@ -291,6 +291,49 @@ function DBHelper() {
     }
   }
 
+  async function upsertReaction(
+    id: string,
+    messageId: string,
+    participant: string,
+    emoji: string,
+    createdAt: Date
+  ) {
+    try {
+      const result = await prisma.message_reactions.upsert({
+        where: { id },
+        update: {
+          messageId,
+          participant,
+          emoji,
+          createdAt,
+        },
+        create: {
+          id,
+          messageId,
+          participant,
+          emoji,
+          createdAt,
+        },
+      });
+      return result;
+    } catch (err) {
+      console.error("Error upserting reaction:", err);
+      throw err;
+    }
+  }
+
+  async function getMessageReactions(messageId: string) {
+    try {
+      return await prisma.message_reactions.findMany({
+        where: { messageId },
+        orderBy: { createdAt: 'asc' }
+      });
+    } catch (err) {
+      console.error("Error fetching message reactions:", err);
+      throw err;
+    }
+  }
+
   return {
     GetUser,
     upsertChat,
@@ -298,6 +341,8 @@ function DBHelper() {
     GetPhoneNum,
     upsertGroup,
     updateMessageStatus,
+    upsertReaction,
+    getMessageReactions,
   };
 }
 

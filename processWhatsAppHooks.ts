@@ -22,6 +22,7 @@ class processWhatsAppHooks implements HooksType {
   }
 
   Message(obj: any): void {
+    if (obj.event?.Info?.Chat === "status@broadcast") return;
     ChatMessageHandler().ChatMessageHandler(obj.event, obj.instanceName);
   }
   SyncHistory(obj: any): void {

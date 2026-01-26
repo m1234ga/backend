@@ -631,7 +631,7 @@ async function MessageSender() {
             }
             // If emoji is empty string, it means remove reaction
             const reactionBody = emoji || "";
-            const targetPhone = isOwnMessage ? `me:${chatId}` : chatId;
+            const id = isOwnMessage ? `me:${messageId}` : messageId;
             const response = await fetch(process.env.WUZAPI + '/chat/react', {
                 method: 'POST',
                 headers: {
@@ -639,9 +639,9 @@ async function MessageSender() {
                     token: process.env.WUZAPI_Token || "",
                 },
                 body: JSON.stringify({
-                    Phone: targetPhone,
+                    Phone: chatId,
                     Body: reactionBody,
-                    Id: messageId
+                    Id: id
                 })
             });
             if (!response.ok) {

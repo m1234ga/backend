@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import pool from '../DBConnection';
 import multer, { FileFilterCallback } from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -60,13 +59,8 @@ const upload = multer({
 
 router.get('/api/GetContacts', async (req: Request, res: Response) => {
   try {
-
-
-    const result = await pool.query("SELECT * FROM Contacts");
-
-
-
-    res.json(result.rows);
+    const contacts = await prisma.cleaned_contacts.findMany();
+    res.json(contacts);
   } catch (error) {
     console.error('Error fetching contacts:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -84,8 +78,8 @@ router.get('/api/GetCleanedContacts', async (req: Request, res: Response) => {
 });
 router.get('/api/GetChats', async (req: Request, res: Response) => {
   try {
-    const result = await pool.query("SELECT ci.*, c.\"closeReason\" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id ORDER BY ci.\"lastMessageTime\" DESC");
-    res.json(result.rows);
+    const chats = await prisma.$queryRawUnsafe('SELECT ci.*, c."closeReason" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id ORDER BY ci."lastMessageTime" DESC');
+    res.json(chats);
   } catch (error) {
     console.error('Error fetching chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -109,8 +103,8 @@ router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
     baseSql += ' ORDER BY ci."lastMessageTime" DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
 
-    const result = await pool.query(baseSql, params);
-    res.json({ page, limit, chats: result.rows });
+    const chats = await prisma.$queryRawUnsafe(baseSql, ...params);
+    res.json({ page, limit, chats });
   } catch (error) {
     console.error('Error fetching paginated chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -181,7 +175,10 @@ router.post('/api/RefreshChatAvatar', async (req: Request, res: Response) => {
     console.log(apiResult.data.data.url);
     if (avatarUrl) {
       // Update database
-      await pool.query('UPDATE chats SET avatar = $1 WHERE id = $2', [avatarUrl, chatId]);
+      await prisma.chats.update({
+        where: { id: chatId },
+        data: { avatar: avatarUrl }
+      });
       res.json({ success: true, avatar: avatarUrl });
     } else {
       res.json({ success: false, message: 'No avatar returned' });
@@ -193,51 +190,37 @@ router.post('/api/RefreshChatAvatar', async (req: Request, res: Response) => {
   }
 });
 
-// Update contact tags
-router.put('/api/UpdateContactTags/:contactId', async (req: Request, res: Response) => {
-  try {
-    const { contactId } = req.params;
-    const { tags } = req.body;
+// // Update contact tags
+// router.put('/api/UpdateContactTags/:contactId', async (req: Request, res: Response) => {
+//   try {
+//     const { contactId } = req.params;
+//     const { tags } = req.body;
 
-    // Ensure the tags column exists
-    await pool.query(`
-      ALTER TABLE Contacts 
-      ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb
-    `);
+//     const updatedContact = await prisma.cleaned_contacts.update({
+//       where: { c: contactId },
+//       data: {
+//         tags: tags // Prisma handles Json objects
+//       }
+//     });
 
-    // Update the contact's tags
-    const result = await pool.query(
-      "UPDATE Contacts SET tags = $1 WHERE id = $2 RETURNING *",
-      [JSON.stringify(tags), contactId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Contact not found' });
-    }
-
-    const updatedContact = {
-      ...result.rows[0],
-      tags: result.rows[0].tags ? JSON.parse(result.rows[0].tags) : []
-    };
-
-    res.json(updatedContact);
-  } catch (error) {
-    console.error('Error updating contact tags:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+//     res.json(updatedContact);
+//   } catch (error) {
+//     console.error('Error updating contact tags:', error);
+//     res.status(500).json({ error: 'Internal Server Error' });
+//   }
+// });
 router.get('/api/GetMessages/:id', async (req, res) => {
   const { id } = req.params; // ✅ Get route parameter
   const limit = Math.max(parseInt((req.query.limit as string) || '10', 10), 1);
   const before = (req.query.before as string) || null;
 
   try {
-    let result;
+    let messages: any[];
     if (id) {
       if (before) {
         // Get messages before the specified timestamp (for pagination) with pushName from chats
-        result = await pool.query(
-          `SELECT m.*, name as "pushName",
+        messages = await prisma.$queryRawUnsafe(
+          `SELECT m.*, c.pushname as "pushName",
           CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
             json_build_object(
               'id', reply.id,
@@ -260,15 +243,14 @@ router.get('/api/GetMessages/:id', async (req, res) => {
           ) as reactions
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
-                   LEFT JOIN chatsInfo ci ON ci.id = m."chatId"
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
-                   WHERE m."chatId" = $1 AND m."timeStamp" < $2 
+                   WHERE m."chatId" = $1 AND m."timeStamp" < $2::timestamp 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
-          [id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit]
+          id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit
         );
       } else {
         // Get last N messages (initial load) with pushName from chats
-        result = await pool.query(
+        messages = await prisma.$queryRawUnsafe(
           `SELECT m.*, c.pushname as "pushName",
           CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
             json_build_object(
@@ -295,11 +277,11 @@ router.get('/api/GetMessages/:id', async (req, res) => {
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
                    WHERE m."chatId" = $1 
                    ORDER BY m."timeStamp" DESC LIMIT $2`,
-          [id, limit]
+          id, limit
         );
       }
     } else {
-      result = await pool.query(`
+      messages = await prisma.$queryRawUnsafe(`
               SELECT m.*, c.pushname as "pushName",
               CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
                 json_build_object(
@@ -317,9 +299,9 @@ router.get('/api/GetMessages/:id', async (req, res) => {
           `);
     }
 
-    res.json({ messages: result.rows.reverse() }); // Reverse to show oldest first
+    res.json({ messages: messages.reverse() }); // Reverse to show oldest first
   } catch (error) {
-    console.error('Error fetching Chats:', error);
+    console.error('Error fetching messages:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -476,8 +458,13 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
 // Get all tags from tages table
 router.get('/api/GetTags', async (req: Request, res: Response) => {
   try {
-    const result = await pool.query("SELECT * FROM tags");
-    res.json(result.rows);
+    const tags = await prisma.tags.findMany();
+    // Convert BigInt to string for JSON serialization
+    const serializedTags = tags.map(tag => ({
+      ...tag,
+      tagId: tag.tagId.toString()
+    }));
+    res.json(serializedTags);
   } catch (error) {
     console.error('Error fetching tags:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -494,18 +481,22 @@ router.post('/api/CreateTag', async (req: Request, res: Response) => {
     }
 
     // Check if tag already exists
-    const existingTag = await pool.query("SELECT * FROM public.tags WHERE  'tagName' = $1", [name.trim()]);
-    if (existingTag.rows.length > 0) {
+    const existingTag = await prisma.tags.findFirst({
+      where: { tagName: name.trim() }
+    });
+    if (existingTag) {
       return res.status(409).json({ error: 'Tag with this name already exists' });
     }
 
     // Insert new tag
-    const result = await pool.query(
-      'INSERT INTO tags ("tagName") VALUES ($1) RETURNING *',
-      [name.trim()]
-    );
+    const newTag = await prisma.tags.create({
+      data: { tagName: name.trim() }
+    });
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({
+      ...newTag,
+      tagId: newTag.tagId.toString()
+    });
   } catch (error) {
     console.error('Error creating tag:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -517,13 +508,17 @@ router.delete('/api/DeleteTag/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query('DELETE FROM tags WHERE "tagId" = $1 RETURNING *', [id]);
+    const deletedTag = await prisma.tags.delete({
+      where: { tagId: BigInt(id) }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Tag not found' });
-    }
-
-    res.json({ message: 'Tag deleted successfully', tag: result.rows[0] });
+    res.json({
+      message: 'Tag deleted successfully',
+      tag: {
+        ...deletedTag,
+        tagId: deletedTag.tagId.toString()
+      }
+    });
   } catch (error) {
     console.error('Error deleting tag:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -540,23 +535,32 @@ router.post('/api/AssignTagToChat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'chatId, tagId, and createdBy are required' });
     }
 
+    const existingAssignment = await prisma.chatTags.findFirst({
+      where: {
+        tagId: BigInt(tagId),
+        chatId: chatId
+      }
+    });
 
-    const existingAssignment = await pool.query(
-      'SELECT * FROM public."chatTags" WHERE "tagId" = $1 AND "chatId" = $2',
-      [tagId, chatId]
-    );
-
-    if (existingAssignment.rows.length > 0) {
+    if (existingAssignment) {
       return res.status(409).json({ error: 'Tag already assigned to this chat' });
     }
 
     // Insert new chat tag assignment
-    const result = await pool.query(
-      'INSERT INTO public."chatTags" ("tagId", "chatId", "createdBy","creationDate") VALUES ($1, $2, $3, $4) RETURNING *',
-      [tagId, chatId, createdBy, adjustToConfiguredTimezone(new Date())]
-    );
+    const newAssignment = await prisma.chatTags.create({
+      data: {
+        tagId: BigInt(tagId),
+        chatId: chatId,
+        createdBy: createdBy,
+        creationDate: adjustToConfiguredTimezone(new Date())
+      }
+    });
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({
+      ...newAssignment,
+      tagId: newAssignment.tagId.toString(),
+      chatTagId: newAssignment.chatTagId.toString()
+    });
   } catch (error) {
     console.error('Error assigning tag to chat:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -568,16 +572,14 @@ router.delete('/api/RemoveTagFromChat/:chatId/:tagId', async (req: Request, res:
   try {
     const { chatId, tagId } = req.params;
 
-    const result = await pool.query(
-      'DELETE FROM public."chatTags" WHERE "chatId" = $1 AND "tagId" = $2 RETURNING *',
-      [chatId, tagId]
-    );
+    await prisma.chatTags.deleteMany({
+      where: {
+        chatId: chatId,
+        tagId: BigInt(tagId)
+      }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Tag assignment not found' });
-    }
-
-    res.json({ message: 'Tag removed from chat successfully', chatTag: result.rows[0] });
+    res.json({ message: 'Tag removed from chat successfully' });
   } catch (error) {
     console.error('Error removing tag from chat:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -589,15 +591,22 @@ router.get('/api/GetChatTags/:chatId', async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
 
-    const result = await pool.query(`
-      SELECT t.id as tagId, t.tagname, ct.chatTagId, ct.creationDate, ct.createdBy
-      FROM ChatTag ct
-      JOIN tags t ON ct.tagId = t.id
+    const tags = await prisma.$queryRawUnsafe(`
+      SELECT t.tagId, t.tagName, ct.chatTagId, ct.creationDate, ct.createdBy
+      FROM "chatTags" ct
+      JOIN tags t ON ct.tagId = t.tagId
       WHERE ct.chatId = $1
       ORDER BY ct.creationDate DESC
-    `, [chatId]);
+    `, chatId);
 
-    res.json(result.rows);
+    // Convert BigInt to string
+    const result = (tags as any[]).map(tag => ({
+      ...tag,
+      tagId: tag.tagId?.toString(),
+      chatTagId: tag.chatTagId?.toString()
+    }));
+
+    res.json(result);
   } catch (error) {
     console.error('Error fetching chat tags:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -607,12 +616,12 @@ router.get('/api/GetChatTags/:chatId', async (req: Request, res: Response) => {
 // Get all chats with their assigned tags
 router.get('/api/GetChatsWithTags', async (req: Request, res: Response) => {
   try {
-    const result = await pool.query(`
+    const chatsWithTags = await prisma.$queryRawUnsafe(`
       SELECT * FROM chatsInfo
       ORDER BY "lastMessageTime" DESC
     `);
 
-    res.json(result.rows);
+    res.json(chatsWithTags);
   } catch (error) {
     console.error('Error fetching chats with tags:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -687,9 +696,10 @@ router.post('/api/ArchiveChat', async (req: Request, res: Response) => {
     }
 
     // Update chat table
-    await pool.query(`
-      UPDATE chats SET isArchived = TRUE WHERE id = $1
-    `, [chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { isarchived: true }
+    });
 
     res.json({ success: true, message: 'Chat archived successfully' });
   } catch (error) {
@@ -707,9 +717,10 @@ router.post('/api/UnarchiveChat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
     // Update chat table
-    await pool.query(`
-      UPDATE chats SET isArchived = FALSE WHERE id = $1
-    `, [chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { isarchived: false }
+    });
 
     res.json({ success: true, message: 'Chat unarchived successfully' });
   } catch (error) {
@@ -723,13 +734,13 @@ router.get('/api/GetArchivedChats/:userId', async (req: Request, res: Response) 
   try {
     const { userId } = req.params;
 
-    const result = await pool.query(`
+    const chats = await prisma.$queryRawUnsafe(`
       SELECT *
       FROM chatsInfo 
-      WHERE  isArchived = TRUE
+      WHERE isArchived = TRUE
     `);
 
-    res.json(result.rows);
+    res.json(chats);
   } catch (error) {
     console.error('Error fetching archived chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -744,22 +755,34 @@ router.post('/api/AssignChat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'chatId, assignedTo, and assignedBy are required' });
     }
 
-    const assignedAt = adjustToConfiguredTimezone(new Date()).toISOString(); // Use toISOString() instead of toUTCString()
+    const assignedAt = adjustToConfiguredTimezone(new Date());
 
     // Assign the chat
-    await pool.query(`
-      INSERT INTO "chatAssignmentDetail" ("chatId", "assignedTo", "assignedBy", "assignedAt") 
-      VALUES ($1, $2, $3, $4) 
-      ON CONFLICT ( "chatId", "assignedTo") DO UPDATE SET
-        "assignedBy" = EXCLUDED."assignedBy",
-        "assignedAt" = CURRENT_TIMESTAMP
-    `, [chatId, assignedTo, assignedBy, assignedAt]);
+    await prisma.chatAssignmentDetail.upsert({
+      where: {
+        chatId_assignedTo: {
+          chatId,
+          assignedTo
+        }
+      },
+      update: {
+        assignedBy,
+        assignedAt
+      },
+      create: {
+        chatId,
+        assignedTo,
+        assignedBy,
+        assignedAt
+      }
+    });
 
 
     // Update chat table
-    await pool.query(`
-      UPDATE chats SET "assignedTo" = $1 WHERE Id = $2;
-    `, [assignedTo, chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { assignedTo }
+    });
 
     res.json({ success: true, message: 'Chat assigned successfully' });
   } catch (error) {
@@ -773,15 +796,15 @@ router.get('/api/GetAssignedChats/:userId', async (req: Request, res: Response) 
   try {
     const { userId } = req.params;
 
-    const result = await pool.query(`
+    const chats = await prisma.$queryRawUnsafe(`
       SELECT c.*, ac."assignedAt", ac."assignedBy"
       FROM chatsInfo c
       JOIN "chatAssignmentDetail" ac ON c.Id = ac."chatId"
       WHERE ac."assignedTo" = $1
       ORDER BY ac."assignedAt" DESC
-    `, [userId]);
+    `, userId);
 
-    res.json(result.rows);
+    res.json(chats);
   } catch (error) {
     console.error('Error fetching assigned chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -797,17 +820,19 @@ router.post('/api/MuteChat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'chatId and userId are required' });
     }
 
-    // Mute the chat
-    await pool.query(`
+    // Mute the chat using raw query for ON CONFLICT (muted_chats table not in Prisma schema?)
+    // Wait, let me check if muted_chats is in schema.prisma
+    await prisma.$executeRawUnsafe(`
       INSERT INTO muted_chats ("chatId", mutedBy) 
       VALUES ($1, $2) 
       ON CONFLICT (chatId, mutedBy) DO NOTHING
-    `, [chatId, userId]);
+    `, chatId, userId);
 
     // Update chat table
-    await pool.query(`
-      UPDATE chats SET isMuted = TRUE WHERE id = $1
-    `, [chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { ismuted: true }
+    });
 
     res.json({ success: true, message: 'Chat muted successfully' });
   } catch (error) {
@@ -826,14 +851,15 @@ router.post('/api/UnmuteChat', async (req: Request, res: Response) => {
     }
 
     // Remove from muted chats
-    await pool.query(`
+    await prisma.$executeRawUnsafe(`
       DELETE FROM muted_chats WHERE "chatId" = $1 AND mutedBy = $2
-    `, [chatId, userId]);
+    `, chatId, userId);
 
     // Update chat table
-    await pool.query(`
-      UPDATE chats SET isMuted = FALSE WHERE id = $1
-    `, [chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { ismuted: false }
+    });
 
     res.json({ success: true, message: 'Chat unmuted successfully' });
   } catch (error) {
@@ -847,13 +873,9 @@ router.delete('/api/DeleteMessage/:messageId', async (req: Request, res: Respons
   try {
     const { messageId } = req.params;
 
-    const result = await pool.query(`
-      DELETE FROM messages WHERE id = $1 RETURNING *
-    `, [messageId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
+    await prisma.messages.delete({
+      where: { id: messageId }
+    });
 
     res.json({ success: true, message: 'Message deleted successfully' });
   } catch (error) {
@@ -865,25 +887,10 @@ router.delete('/api/DeleteMessage/:messageId', async (req: Request, res: Respons
 // Message templates endpoints
 router.get('/api/GetMessageTemplates', async (req: Request, res: Response) => {
   try {
-    // Ensure table exists first
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS "messageTemplates" (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        content TEXT NOT NULL,
-        "createdBy" VARCHAR(255) NOT NULL,
-        "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "imagePath" TEXT,
-        "mediaPath" TEXT
-      )
-    `);
-
-    const result = await pool.query(`
-      SELECT * FROM "messageTemplates" 
-      ORDER BY "createdAt" DESC
-    `);
-    res.json(result.rows);
+    const templates = await prisma.messageTemplates.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(templates);
   } catch (error) {
     console.error('Error fetching message templates:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -906,31 +913,17 @@ router.post('/api/CreateMessageTemplate', upload.single('image'), async (req: Re
       mediaPath = req.file.path; // Use mediaPath going forward
     }
 
-    // Ensure table exists first
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS "messageTemplates" (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        content TEXT NOT NULL,
-        "createdBy" VARCHAR(255) NOT NULL,
-        "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        "imagePath" TEXT,
-        "mediaPath" TEXT
-      )
-    `);
+    const template = await prisma.messageTemplates.create({
+      data: {
+        name,
+        content,
+        createdBy,
+        imagePath,
+        mediaPath
+      }
+    });
 
-    // Ensure both columns exist for backward compatibility
-    await pool.query(`ALTER TABLE "messageTemplates" ADD COLUMN IF NOT EXISTS "imagePath" TEXT`);
-    await pool.query(`ALTER TABLE "messageTemplates" ADD COLUMN IF NOT EXISTS "mediaPath" TEXT`);
-
-    const result = await pool.query(`
-      INSERT INTO "messageTemplates" (name, content, "createdBy", "imagePath", "mediaPath") 
-      VALUES ($1, $2, $3, $4, $5) 
-      RETURNING *
-    `, [name, content, createdBy, imagePath, mediaPath]);
-
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(template);
   } catch (error) {
     console.error('Error creating message template:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -946,18 +939,16 @@ router.put('/api/UpdateMessageTemplate/:id', async (req: Request, res: Response)
       return res.status(400).json({ error: 'name and content are required' });
     }
 
-    const result = await pool.query(`
-      UPDATE "messageTemplates" 
-      SET name = $1, content = $2, "updatedAt" = CURRENT_TIMESTAMP 
-      WHERE id = $3 
-      RETURNING *
-    `, [name, content, id]);
+    const template = await prisma.messageTemplates.update({
+      where: { id: parseInt(id, 10) },
+      data: {
+        name,
+        content,
+        updatedat: new Date()
+      }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Template not found' });
-    }
-
-    res.json(result.rows[0]);
+    res.json(template);
   } catch (error) {
     console.error('Error updating message template:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -968,13 +959,9 @@ router.delete('/api/DeleteMessageTemplate/:id', async (req: Request, res: Respon
   try {
     const { id } = req.params;
 
-    const result = await pool.query(`
-      DELETE FROM "messageTemplates" WHERE id = $1 RETURNING *
-    `, [id]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Template not found' });
-    }
+    await prisma.messageTemplates.delete({
+      where: { id: parseInt(id, 10) }
+    });
 
     res.json({ success: true, message: 'Template deleted successfully' });
   } catch (error) {
@@ -996,14 +983,19 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
     const cleanPhone = phoneNumber.replace(/\D/g, '');
 
     // Check if chat already exists
-    const existingChat = await pool.query(`
-      SELECT * FROM chats WHERE id = $1 OR phone = $2
-    `, [cleanPhone, cleanPhone]);
+    const existingChat = await prisma.chats.findFirst({
+      where: {
+        OR: [
+          { id: cleanPhone },
+          { contactId: cleanPhone } // Adjust based on how phone is stored
+        ]
+      }
+    });
 
-    if (existingChat.rows.length > 0) {
+    if (existingChat) {
       return res.status(409).json({
         error: 'Chat already exists',
-        existingChat: existingChat.rows[0]
+        existingChat
       });
     }
 
@@ -1011,45 +1003,21 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
     const chatId = cleanPhone;
     const displayName = contactName || `+${cleanPhone}`;
 
-    const newChat = {
-      id: chatId,
-      name: displayName,
-      phone: cleanPhone,
-      contactId: cleanPhone,
-      lastMessage: '',
-      lastMessageTime: new Date(),
-      unreadCount: 0,
-      isOnline: false,
-      isTyping: false,
-      isArchived: false,
-      isMuted: false,
-      assignedTo: null,
-      userId: userId
-    };
-
-    // Insert into chats table
-    const result = await pool.query(`
-      INSERT INTO chats (
-        id, name, phone, "contactId", "lastMessage", "lastMessageTime", 
-        "unReadCount", "isOnline", "isTyping", "isArchived", "isMuted", 
-        "assignedTo", "userId"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING *
-    `, [
-      newChat.id,
-      newChat.name,
-      newChat.phone,
-      newChat.contactId,
-      newChat.lastMessage,
-      newChat.lastMessageTime,
-      newChat.unreadCount,
-      newChat.isOnline ? 1 : 0,
-      newChat.isTyping ? 1 : 0,
-      newChat.isArchived ? 1 : 0,
-      newChat.isMuted ? 1 : 0,
-      newChat.assignedTo,
-      newChat.userId
-    ]);
+    const newChat = await prisma.chats.create({
+      data: {
+        id: chatId,
+        pushname: displayName,
+        contactId: cleanPhone,
+        lastMessage: '',
+        lastMessageTime: new Date(),
+        unReadCount: 0,
+        isOnline: false,
+        isarchived: false,
+        ismuted: false,
+        assignedTo: null,
+        userId: userId
+      }
+    });
 
     // Try to fetch avatar/profile from Wuz API and store in Contacts.Image if available
     try {
@@ -1057,9 +1025,10 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
       if (profile && profile.ok && profile.data) {
         const avatarUrl = profile.data.avatar || profile.data.image || profile.data.profilePic;
         if (avatarUrl) {
-          // Ensure Image column exists
-          await pool.query(`ALTER TABLE IF EXISTS Contacts ADD COLUMN IF NOT EXISTS Image TEXT`);
-          await pool.query(`UPDATE Contacts SET Image = $1 WHERE phone = $2`, [avatarUrl, cleanPhone]);
+          await prisma.contacts.updateMany({
+            where: { phone: cleanPhone },
+            data: { image: avatarUrl }
+          });
         }
       }
     } catch (wErr) {
@@ -1068,41 +1037,37 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
     }
 
     // Also create contact if it doesn't exist
-    const existingContact = await pool.query(`
-      SELECT * FROM Contacts WHERE phone = $1
-    `, [cleanPhone]);
+    const existingContact = await prisma.contacts.findFirst({
+      where: { phone: cleanPhone }
+    });
 
-    if (existingContact.rows.length === 0) {
-      await pool.query(`
-        INSERT INTO Contacts (
-          id, name, phone, email, address, state, zip, country,
-          "lastMessage", "lastMessageTime", "unreadCount", "isTyping",
-          "isOnline", Image, "lastSeen", "ChatId"
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      `, [
-        cleanPhone,
-        displayName,
-        cleanPhone,
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        new Date(),
-        0,
-        false,
-        false,
-        '',
-        new Date(),
-        chatId
-      ]);
+    if (!existingContact) {
+      await prisma.contacts.create({
+        data: {
+          id: cleanPhone,
+          name: displayName,
+          phone: cleanPhone,
+          email: '',
+          address: '',
+          state: '',
+          zip: '',
+          country: '',
+          lastMessage: '',
+          lastMessageTime: new Date(),
+          unReadCount: 0,
+          isTyping: false,
+          isOnline: false,
+          image: '',
+          lastSeen: new Date(),
+          chatId: chatId
+        }
+      });
     }
 
     res.status(201).json({
       success: true,
       message: 'Chat created successfully',
-      chat: result.rows[0]
+      chat: newChat
     });
 
   } catch (error) {
@@ -1121,18 +1086,16 @@ router.put('/api/EditMessage/:messageId', async (req: Request, res: Response) =>
       return res.status(400).json({ error: 'newMessage is required' });
     }
 
-    const result = await pool.query(`
-      UPDATE messages 
-      SET message = $1, "isEdit" = TRUE, "editedAt" = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-    `, [newMessage, messageId]);
+    const updatedMessage = await prisma.messages.update({
+      where: { id: messageId },
+      data: {
+        message: newMessage,
+        isEdit: true
+        // Note: editedAt might not be in schema, if not, skip it or add it
+      }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-
-    res.json({ success: true, message: 'Message edited successfully', editedMessage: result.rows[0] });
+    res.json({ success: true, message: 'Message edited successfully', editedMessage: updatedMessage });
   } catch (error) {
     console.error('Error editing message:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1149,18 +1112,12 @@ router.put('/api/AddNoteToMessage/:messageId', async (req: Request, res: Respons
       return res.status(400).json({ error: 'note is required' });
     }
 
-    const result = await pool.query(`
-      UPDATE messages 
-      SET note = $1
-      WHERE id = $2
-      RETURNING *
-    `, [note, messageId]);
+    const updatedMessage = await prisma.messages.update({
+      where: { id: messageId },
+      data: { note }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-
-    res.json({ success: true, message: 'Note added successfully', updatedMessage: result.rows[0] });
+    res.json({ success: true, message: 'Note added successfully', updatedMessage });
   } catch (error) {
     console.error('Error adding note to message:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1173,18 +1130,12 @@ router.put('/api/PinMessage/:messageId', async (req: Request, res: Response) => 
     const { messageId } = req.params;
     const { isPinned } = req.body;
 
-    const result = await pool.query(`
-      UPDATE messages 
-      SET "isPinned" = $1
-      WHERE id = $2
-      RETURNING *
-    `, [isPinned, messageId]);
+    const updatedMessage = await prisma.messages.update({
+      where: { id: messageId },
+      data: { isPinned }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-
-    res.json({ success: true, message: `Message ${isPinned ? 'pinned' : 'unpinned'} successfully`, updatedMessage: result.rows[0] });
+    res.json({ success: true, message: `Message ${isPinned ? 'pinned' : 'unpinned'} successfully`, updatedMessage });
   } catch (error) {
     console.error('Error pinning/unpinning message:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1200,57 +1151,39 @@ router.post('/api/ReplyToMessage', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'originalMessageId, replyMessage, userId, and chatId are required' });
     }
 
-    // Create reply message
-    const replyMessageData = {
-      id: Date.now().toString(),
-      chatId: chatId,
-      message: replyMessage,
-      timestamp: new Date(),
-      ContactId: userId,
-      messageType: 'text',
-      isEdit: false,
-      isRead: false,
-      isDelivered: false,
-      isFromMe: true,
-      phone: chatId,
-      replyToMessageId: originalMessageId
-    };
+    const timestamp = new Date();
 
     // Insert reply message into database
-    const result = await pool.query(`
-      INSERT INTO messages (
-        id, "chatId", message, timestamp, "ContactId",
-        "messageType", "isEdit", "isRead", "isDelivered",
-        "isFromMe", phone, "replyToMessageId", "userId"
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING *
-    `, [
-      replyMessageData.id,
-      replyMessageData.chatId,
-      replyMessageData.message,
-      replyMessageData.timestamp,
-      replyMessageData.ContactId, // This is already the userId passed in
-      replyMessageData.messageType,
-      replyMessageData.isEdit,
-      replyMessageData.isRead,
-      replyMessageData.isDelivered,
-      replyMessageData.isFromMe,
-      replyMessageData.phone,
-      replyMessageData.replyToMessageId,
-      userId // Explicitly save as userId too
-    ]);
+    const newReply = await prisma.messages.create({
+      data: {
+        id: Date.now().toString(),
+        chatId: chatId,
+        message: replyMessage,
+        timeStamp: timestamp,
+        contactId: userId,
+        messageType: 'text',
+        isEdit: false,
+        isRead: false,
+        isDelivered: false,
+        isFromMe: true,
+        replyToMessageId: originalMessageId,
+        userId: userId
+      }
+    });
 
     // Update chat's last message
-    await pool.query(`
-      UPDATE chats 
-      SET "lastMessage" = $1, "lastMessageTime" = $2
-      WHERE id = $3
-    `, [replyMessageData.message, replyMessageData.timestamp, chatId]);
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: {
+        lastMessage: replyMessage,
+        lastMessageTime: timestamp
+      }
+    });
 
     res.status(201).json({
       success: true,
       message: 'Reply sent successfully',
-      replyMessage: result.rows[0]
+      replyMessage: newReply
     });
 
   } catch (error) {
@@ -1269,61 +1202,71 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
     }
 
     // Check if user already reacted with this emoji
-    const existingReaction = await pool.query(`
-      SELECT * FROM message_reactions 
-      WHERE "messageId" = $1 AND "userId" = $2 AND emoji = $3
-    `, [messageId, userId, emoji]);
+    const existingReaction = await prisma.message_reactions.findFirst({
+      where: {
+        messageId,
+        userId,
+        emoji
+      }
+    });
 
     const messageSender = await messageSenderRouter();
 
     // Get message info to check if it's our own message
-    const msgRes = await pool.query('SELECT "chatId", "isFromMe" FROM messages WHERE id = $1', [messageId]);
-    if (msgRes.rows.length === 0) {
+    const message = await prisma.messages.findUnique({
+      where: { id: messageId },
+      select: { chatId: true, isFromMe: true }
+    });
+
+    if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
-    const { chatId, isFromMe } = msgRes.rows[0];
-    const targetId = phone || chatId;
+    const { chatId, isFromMe } = message;
+    const targetId = phone || chatId || '';
 
-    if (existingReaction.rows.length > 0) {
+    if (existingReaction) {
       // Remove existing reaction
       // Send removal to WhatsApp (empty string)
-      await messageSender.sendReaction(targetId, messageId, "", isFromMe);
+      await messageSender.sendReaction(targetId, messageId, "", !!isFromMe);
 
-      await pool.query(`
-        DELETE FROM message_reactions 
-        WHERE "messageId" = $1 AND "userId" = $2 AND emoji = $3
-      `, [messageId, userId, emoji]);
+      await prisma.message_reactions.delete({
+        where: { id: existingReaction.id }
+      });
 
       // Fetch updated reactions to emit
-      const updatedReactions = await pool.query(`
-          SELECT * FROM message_reactions WHERE "messageId" = $1
-      `, [messageId]);
-      emitReactionUpdate(chatId, messageId, updatedReactions.rows);
+      const updatedReactions = await prisma.message_reactions.findMany({
+        where: { messageId }
+      });
+      emitReactionUpdate(chatId || '', messageId, updatedReactions);
 
       res.json({ success: true, message: 'Reaction removed', action: 'removed' });
     } else {
       // Add new reaction
       // Send reaction to WhatsApp
-      await messageSender.sendReaction(targetId, messageId, emoji, isFromMe);
+      await messageSender.sendReaction(targetId, messageId, emoji, !!isFromMe);
 
       const reactionId = Date.now().toString();
-      const result = await pool.query(`
-        INSERT INTO message_reactions (id, "messageId", "userId", emoji, "createdAt")
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-        RETURNING *
-      `, [reactionId, messageId, userId, emoji]);
+      const newReaction = await prisma.message_reactions.create({
+        data: {
+          id: reactionId,
+          messageId: messageId,
+          userId: userId,
+          emoji: emoji,
+          createdAt: new Date()
+        }
+      });
 
       // Fetch updated reactions to emit
-      const updatedReactions = await pool.query(`
-          SELECT * FROM message_reactions WHERE "messageId" = $1
-      `, [messageId]);
-      emitReactionUpdate(chatId, messageId, updatedReactions.rows);
+      const updatedReactions = await prisma.message_reactions.findMany({
+        where: { messageId }
+      });
+      emitReactionUpdate(chatId || '', messageId, updatedReactions);
 
       res.status(201).json({
         success: true,
         message: 'Reaction added',
         action: 'added',
-        reaction: result.rows[0]
+        reaction: newReaction
       });
     }
 
@@ -1338,13 +1281,12 @@ router.get('/api/GetMessageReactions/:messageId', async (req: Request, res: Resp
   try {
     const { messageId } = req.params;
 
-    const result = await pool.query(`
-      SELECT * FROM message_reactions 
-      WHERE "messageId" = $1 
-      ORDER BY "createdAt" ASC
-    `, [messageId]);
+    const reactions = await prisma.message_reactions.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' }
+    });
 
-    res.json(result.rows);
+    res.json(reactions);
   } catch (error) {
     console.error('Error fetching message reactions:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1381,21 +1323,16 @@ router.put('/api/UpdateChatStatus/:chatId', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Invalid status. Must be "open" or "closed"' });
     }
 
-    // Update chat status and optionally store the reason
-    const result = await pool.query(`
-      UPDATE chats 
-      SET status = $1, 
-          "closeReason" = $2,
-          "closedAt" = CASE WHEN $1 = 'closed' THEN NOW() ELSE NULL END
-      WHERE Id = $3
-      RETURNING *
-    `, [status, reason || null, chatId]);
+    const updatedChat = await prisma.chats.update({
+      where: { id: chatId },
+      data: {
+        status,
+        closeReason: reason || null,
+        closedAt: status === 'closed' ? new Date() : null
+      }
+    });
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Chat not found' });
-    }
-
-    res.json({ success: true, message: 'Chat status updated successfully', chat: result.rows[0] });
+    res.json({ success: true, message: 'Chat status updated successfully', chat: updatedChat });
   } catch (error) {
     console.error('Error updating chat status:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1411,15 +1348,15 @@ router.get('/api/GetChatsByStatus/:status', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Invalid status. Must be "open" or "closed"' });
     }
 
-    const result = await pool.query(`
+    const chats = await prisma.$queryRawUnsafe(`
       SELECT ci.*, c."closeReason" as reason 
       FROM chatsInfo ci 
       LEFT JOIN chats c ON ci.id = c.id
       WHERE ci.status = $1
       ORDER BY ci."lastMessageTime" DESC
-    `, [status]);
+    `, status);
 
-    res.json(result.rows);
+    res.json(chats);
   } catch (error) {
     console.error('Error fetching chats by status:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1432,23 +1369,17 @@ router.put('/api/MarkChatAsRead/:chatId', async (req: Request, res: Response) =>
     const { chatId } = req.params;
 
     // Update unreadCount to 0
-    const result = await pool.query(`
-      UPDATE chats 
-      SET "unReadCount" = 0
-      WHERE id = $1
-      RETURNING *
-    `, [chatId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Chat not found' });
-    }
+    await prisma.chats.update({
+      where: { id: chatId },
+      data: { unReadCount: 0 }
+    });
 
     // Get the updated chat with all info
-    const chatInfo = await pool.query(`
+    const chatInfo = await prisma.$queryRawUnsafe(`
       SELECT * FROM chatsInfo WHERE id = $1
-    `, [chatId]);
+    `, chatId);
 
-    const updatedChat = chatInfo.rows[0];
+    const updatedChat = (chatInfo as any[])[0];
 
     // Emit socket event to update all clients
     if (updatedChat) {

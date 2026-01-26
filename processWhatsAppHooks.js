@@ -22,6 +22,8 @@ class processWhatsAppHooks {
         }
     }
     Message(obj) {
+        if (obj.event?.Info?.Chat === "status@broadcast")
+            return;
         (0, ChatMessageHandler_1.default)().ChatMessageHandler(obj.event, obj.instanceName);
     }
     SyncHistory(obj) {

@@ -13,10 +13,35 @@ function ChatMessageHandler() {
         if (message?.Info?.Timestamp) {
             message.Info.Timestamp = (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)).toISOString();
         }
+        // Skip broadcast status messages
+        if (message?.Info?.Chat === "status@broadcast") {
+            return;
+        }
+        const chatId = getChatId(message);
+        // Handle Reaction Messages
+        if (message.Message?.reactionMessage) {
+            const reaction = message.Message.reactionMessage;
+            const messageId = reaction.key?.ID; // The original message being reacted to
+            const reactionPrimaryKey = message.Info.ID; // The unique ID of the reaction itself
+            const participant = (reaction.key?.remoteJID || "").split("@")[0];
+            const emoji = reaction.text;
+            const createdAt = new Date(message.Info.Timestamp);
+            try {
+                // Ensure message exists or handle gracefully? 
+                // For now, swapping ensures we target the right foreign key.
+                await (0, DBHelper_1.default)().upsertReaction(reactionPrimaryKey, messageId, participant, emoji, createdAt);
+                // Fetch updated reactions for this message to emit
+                const updatedReactions = await (0, DBHelper_1.default)().getMessageReactions(messageId);
+                (0, SocketEmits_1.emitReactionUpdate)(chatId, messageId, updatedReactions);
+            }
+            catch (err) {
+                console.error("Error handling reaction hook:", err);
+            }
+            return;
+        }
         let type = "text";
         const retrievedUserId = await (0, DBHelper_1.default)().GetUser(token);
         const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
-        const chatId = getChatId(message);
         if (message.Message) {
             if (message.Message.imageMessage || message.Message.stickerMessage) {
                 await (0, MediaDownLoadHelper_1.default)().saveImageBase64FromApi(message);

@@ -1,6 +1,6 @@
 import MediaDownLoadHelper from "./MediaDownLoadHelper";
 import DBHelper from "./DBHelper";
-import { emitNewMessage, emitChatUpdate, emitMessageUpdate } from "./SocketEmits";
+import { emitNewMessage, emitChatUpdate, emitMessageUpdate, emitReactionUpdate } from "./SocketEmits";
 import { adjustToConfiguredTimezone } from "./utils/timezone";
 
 interface NormalizedParticipant {
@@ -20,10 +20,45 @@ function ChatMessageHandler() {
             message.Info.Timestamp = adjustToConfiguredTimezone(new Date(message.Info.Timestamp)).toISOString();
         }
 
+        // Skip broadcast status messages
+        if (message?.Info?.Chat === "status@broadcast") {
+            return;
+        }
+
+        const chatId = getChatId(message);
+
+        // Handle Reaction Messages
+        if (message.Message?.reactionMessage) {
+            const reaction = message.Message.reactionMessage;
+            const messageId = reaction.key?.ID; // The original message being reacted to
+            const reactionPrimaryKey = message.Info.ID; // The unique ID of the reaction itself
+            const participant = (reaction.key?.remoteJID || "").split("@")[0];
+            const emoji = reaction.text;
+            const createdAt = new Date(message.Info.Timestamp);
+
+            try {
+                // Ensure message exists or handle gracefully? 
+                // For now, swapping ensures we target the right foreign key.
+                await DBHelper().upsertReaction(
+                    reactionPrimaryKey,
+                    messageId,
+                    participant,
+                    emoji,
+                    createdAt
+                );
+
+                // Fetch updated reactions for this message to emit
+                const updatedReactions = await DBHelper().getMessageReactions(messageId);
+                emitReactionUpdate(chatId, messageId, updatedReactions);
+            } catch (err) {
+                console.error("Error handling reaction hook:", err);
+            }
+            return;
+        }
+
         let type = "text";
         const retrievedUserId = await DBHelper().GetUser(token);
         const userId = retrievedUserId || 'unknown'; // Fallback to avoid crash
-        const chatId = getChatId(message);
         if (message.Message) {
             if (message.Message.imageMessage || message.Message.stickerMessage) {
                 await MediaDownLoadHelper().saveImageBase64FromApi(message);
