@@ -5,77 +5,128 @@ require('dotenv').config();
 
 import { env } from 'process';
 
-const WuzURL=env.WUZAPI;
-const WuzToken=env.WUZAPI_Token;
+const WuzURL = env.WUZAPI;
+const WuzToken = env.WUZAPI_Token;
 
-function DownLoadHelper(){
+function DownLoadHelper() {
 
-async  function saveImageBase64FromApi(message:any) {
-    try {
-        var imageInfo=message.Message.imageMessage;
-        var response = await axios.post(WuzURL+'/chat/downloadimage', {
-            Url: imageInfo.URL,
-            DirectPath: imageInfo.directPath,
-            MediaKey: imageInfo.mediaKey,
-            Mimetype: imageInfo.mimetype,
-            FileEncSHA256: imageInfo.fileEncSHA256,
-            FileSHA256: imageInfo.fileSHA256,
-            FileLength: imageInfo.fileLength
-        }, {
-            headers: {
-                token: WuzToken,
-                'Content-Type': 'application/json'
+    async function saveImageBase64FromApi(message: any) {
+        try {
+            const isSticker = !!message.Message.stickerMessage;
+            const mediaInfo = message.Message.imageMessage || message.Message.stickerMessage;
+
+            if (!mediaInfo) return;
+
+            const endpoint = '/chat/downloadimage';
+
+            const response = await axios.post(WuzURL + endpoint, {
+                Url: mediaInfo.URL,
+                DirectPath: mediaInfo.directPath,
+                MediaKey: mediaInfo.mediaKey,
+                Mimetype: mediaInfo.mimetype,
+                FileEncSHA256: mediaInfo.fileEncSHA256,
+                FileSHA256: mediaInfo.fileSHA256,
+                FileLength: mediaInfo.fileLength
+            }, {
+                headers: {
+                    token: WuzToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            // Base64 data
+            const base64Data = response.data.data.Data || response.data.data;
+            const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+
+            // Detect extension
+            const extension = response.data.Mimetype?.split('/')[1] || (isSticker ? 'webp' : 'jpeg');
+            const saveDir = path.join(__dirname, 'imgs');
+
+            if (!fs.existsSync(saveDir)) {
+                fs.mkdirSync(saveDir, { recursive: true });
             }
-        });
-        // Base64 data
-        var base64Image = response.data.data.Data.replace(/^data:image\/\w+;base64,/, '');
-        // Detect extension
-        var extension = response.data.Mimetype?.split('/')[1] || 'webp';
-        var saveDir = path.join(__dirname, 'imgs');
-        if (!fs.existsSync(saveDir))
-            fs.mkdirSync(saveDir, { recursive: true });
-        // Save file to backend/imgs/image.<extension>
-        var savePath = path.join(saveDir, message.Info.ID+`.${extension}`);
-        fs.writeFileSync(savePath, Buffer.from(base64Image, 'base64'));
-        console.log(`✅ Image saved at: ${savePath}`);
+
+            // Save file to backend/imgs/ID.extension
+            const savePath = path.join(saveDir, `${message.Info.ID}.${extension}`);
+            fs.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
+            console.log(`✅ ${isSticker ? 'Sticker' : 'Image'} saved at: ${savePath}`);
+        } catch (err) {
+            console.error(`Error saving ${message.Message.stickerMessage ? 'sticker' : 'image'}:`, (<any>err).message);
+        }
     }
-    catch (err) {
-        console.error('Error:', (<any>err).message);
-    }
-  }
-  async function saveAudioFromApi(message:any) {
-    try {
-        var audioInfo=message.Message.audioMessage;
-        var response = await axios.post(WuzURL+'/chat/downloadaudio', {
-            Url: audioInfo.URL,
-            DirectPath: audioInfo.directPath,
-            MediaKey: audioInfo.mediaKey,
-            Mimetype: audioInfo.mimetype,
-            FileEncSHA256: audioInfo.fileEncSHA256,
-            FileSHA256: audioInfo.fileSHA256,
-            FileLength: audioInfo.fileLength
-        }, {
-            headers: {
-                token: WuzToken,
-                'Content-Type': 'application/json'
+    async function saveDocumentFromApi(message: any) {
+        try {
+            const documentInfo = message.Message.documentMessage;
+            if (!documentInfo) return;
+
+            const response = await axios.post(WuzURL + '/chat/downloaddocument', {
+                Url: documentInfo.URL,
+                DirectPath: documentInfo.directPath,
+                MediaKey: documentInfo.mediaKey,
+                Mimetype: documentInfo.mimetype,
+                FileEncSHA256: documentInfo.fileEncSHA256,
+                FileSHA256: documentInfo.fileSHA256,
+                FileLength: documentInfo.fileLength
+            }, {
+                headers: {
+                    token: WuzToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const base64Data = response.data.data.Data || response.data.data;
+            const cleanBase64 = base64Data.split(',')[1] || base64Data;
+
+            const saveDir = path.join(__dirname, 'docs');
+            if (!fs.existsSync(saveDir)) {
+                fs.mkdirSync(saveDir, { recursive: true });
             }
-        });
-        var base64Data = response.data.data.Data;
-        var cleanBase64 = base64Data.split(',')[1];
-  
-  
-        var extension = 'ogg';
-        var savePath = path.join(__dirname, 'audio', `${message.Info.ID}.${extension}`);
-        fs.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
-        console.log(`🎵 Audio saved at: ${savePath}`);
+
+            // Use the provided filename or default to ID
+            const fileName = documentInfo.fileName || `${message.Info.ID}.${documentInfo.mimetype?.split('/')[1] || 'bin'}`;
+            const savePath = path.join(saveDir, fileName);
+            fs.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
+            console.log(`📄 Document saved at: ${savePath}`);
+        } catch (err) {
+            console.error('Error saving document:', (<any>err).message);
+        }
     }
-    catch (err) {
-        console.error('Error saving audio:', (<any>err).message);
+    async function saveAudioFromApi(message: any) {
+        try {
+            var audioInfo = message.Message.audioMessage;
+            var response = await axios.post(WuzURL + '/chat/downloadaudio', {
+                Url: audioInfo.URL,
+                DirectPath: audioInfo.directPath,
+                MediaKey: audioInfo.mediaKey,
+                Mimetype: audioInfo.mimetype,
+                FileEncSHA256: audioInfo.fileEncSHA256,
+                FileSHA256: audioInfo.fileSHA256,
+                FileLength: audioInfo.fileLength
+            }, {
+                headers: {
+                    token: WuzToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            var base64Data = response.data.data.Data;
+            var cleanBase64 = base64Data.split(',')[1];
+
+
+            var extension = 'ogg';
+            var savePath = path.join(__dirname, 'audio', `${message.Info.ID}.${extension}`);
+            fs.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
+            console.log(`🎵 Audio saved at: ${savePath}`);
+        }
+        catch (err) {
+            console.error('Error saving audio:', (<any>err).message);
+        }
     }
-  }
-  {return {
-    saveAudioFromApi,
-    saveImageBase64FromApi
-  }}
+    {
+        return {
+            saveAudioFromApi,
+            saveImageBase64FromApi,
+            saveDocumentFromApi
+        }
+    }
 }
 export default DownLoadHelper;

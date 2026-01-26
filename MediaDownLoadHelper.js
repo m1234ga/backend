@@ -13,15 +13,19 @@ const WuzToken = process_1.env.WUZAPI_Token;
 function DownLoadHelper() {
     async function saveImageBase64FromApi(message) {
         try {
-            var imageInfo = message.Message.imageMessage;
-            var response = await axios_1.default.post(WuzURL + '/chat/downloadimage', {
-                Url: imageInfo.URL,
-                DirectPath: imageInfo.directPath,
-                MediaKey: imageInfo.mediaKey,
-                Mimetype: imageInfo.mimetype,
-                FileEncSHA256: imageInfo.fileEncSHA256,
-                FileSHA256: imageInfo.fileSHA256,
-                FileLength: imageInfo.fileLength
+            const isSticker = !!message.Message.stickerMessage;
+            const mediaInfo = message.Message.imageMessage || message.Message.stickerMessage;
+            if (!mediaInfo)
+                return;
+            const endpoint = '/chat/downloadimage';
+            const response = await axios_1.default.post(WuzURL + endpoint, {
+                Url: mediaInfo.URL,
+                DirectPath: mediaInfo.directPath,
+                MediaKey: mediaInfo.mediaKey,
+                Mimetype: mediaInfo.mimetype,
+                FileEncSHA256: mediaInfo.fileEncSHA256,
+                FileSHA256: mediaInfo.fileSHA256,
+                FileLength: mediaInfo.fileLength
             }, {
                 headers: {
                     token: WuzToken,
@@ -29,19 +33,56 @@ function DownLoadHelper() {
                 }
             });
             // Base64 data
-            var base64Image = response.data.data.Data.replace(/^data:image\/\w+;base64,/, '');
+            const base64Data = response.data.data.Data || response.data.data;
+            const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
             // Detect extension
-            var extension = response.data.Mimetype?.split('/')[1] || 'webp';
-            var saveDir = path_1.default.join(__dirname, 'imgs');
-            if (!fs_1.default.existsSync(saveDir))
+            const extension = response.data.Mimetype?.split('/')[1] || (isSticker ? 'webp' : 'jpeg');
+            const saveDir = path_1.default.join(__dirname, 'imgs');
+            if (!fs_1.default.existsSync(saveDir)) {
                 fs_1.default.mkdirSync(saveDir, { recursive: true });
-            // Save file to backend/imgs/image.<extension>
-            var savePath = path_1.default.join(saveDir, message.Info.ID + `.${extension}`);
-            fs_1.default.writeFileSync(savePath, Buffer.from(base64Image, 'base64'));
-            console.log(`✅ Image saved at: ${savePath}`);
+            }
+            // Save file to backend/imgs/ID.extension
+            const savePath = path_1.default.join(saveDir, `${message.Info.ID}.${extension}`);
+            fs_1.default.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
+            console.log(`✅ ${isSticker ? 'Sticker' : 'Image'} saved at: ${savePath}`);
         }
         catch (err) {
-            console.error('Error:', err.message);
+            console.error(`Error saving ${message.Message.stickerMessage ? 'sticker' : 'image'}:`, err.message);
+        }
+    }
+    async function saveDocumentFromApi(message) {
+        try {
+            const documentInfo = message.Message.documentMessage;
+            if (!documentInfo)
+                return;
+            const response = await axios_1.default.post(WuzURL + '/chat/downloaddocument', {
+                Url: documentInfo.URL,
+                DirectPath: documentInfo.directPath,
+                MediaKey: documentInfo.mediaKey,
+                Mimetype: documentInfo.mimetype,
+                FileEncSHA256: documentInfo.fileEncSHA256,
+                FileSHA256: documentInfo.fileSHA256,
+                FileLength: documentInfo.fileLength
+            }, {
+                headers: {
+                    token: WuzToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const base64Data = response.data.data.Data || response.data.data;
+            const cleanBase64 = base64Data.split(',')[1] || base64Data;
+            const saveDir = path_1.default.join(__dirname, 'docs');
+            if (!fs_1.default.existsSync(saveDir)) {
+                fs_1.default.mkdirSync(saveDir, { recursive: true });
+            }
+            // Use the provided filename or default to ID
+            const fileName = documentInfo.fileName || `${message.Info.ID}.${documentInfo.mimetype?.split('/')[1] || 'bin'}`;
+            const savePath = path_1.default.join(saveDir, fileName);
+            fs_1.default.writeFileSync(savePath, Buffer.from(cleanBase64, 'base64'));
+            console.log(`📄 Document saved at: ${savePath}`);
+        }
+        catch (err) {
+            console.error('Error saving document:', err.message);
         }
     }
     async function saveAudioFromApi(message) {
@@ -75,7 +116,8 @@ function DownLoadHelper() {
     {
         return {
             saveAudioFromApi,
-            saveImageBase64FromApi
+            saveImageBase64FromApi,
+            saveDocumentFromApi
         };
     }
 }

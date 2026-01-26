@@ -30,12 +30,19 @@ function ChatMessageHandler() {
                 // Ensure message exists or handle gracefully? 
                 // For now, swapping ensures we target the right foreign key.
                 await (0, DBHelper_1.default)().upsertReaction(reactionPrimaryKey, messageId, participant, emoji, createdAt);
-                // Fetch updated reactions for this message to emit
-                const updatedReactions = await (0, DBHelper_1.default)().getMessageReactions(messageId);
+                // Fetch updated reactions with contact names to emit
+                const updatedReactions = await (0, DBHelper_1.default)().getMessageReactionsWithNames(messageId);
                 (0, SocketEmits_1.emitReactionUpdate)(chatId, messageId, updatedReactions);
             }
             catch (err) {
-                console.error("Error handling reaction hook:", err);
+                // If it's a foreign key constraint error (P2003), it means the original message isn't in our DB yet.
+                // This can happen during HistorySync. We'll simply skip the reaction for now.
+                if (err.code === 'P2003') {
+                    console.warn(`Skipping reaction mapping: message ${messageId} not found in database.`);
+                }
+                else {
+                    console.error("Error handling reaction hook:", err);
+                }
             }
             return;
         }
@@ -54,10 +61,15 @@ function ChatMessageHandler() {
                 await (0, MediaDownLoadHelper_1.default)().saveAudioFromApi(message);
                 type = "audio";
             }
+            else if (message.Message.documentMessage) {
+                await (0, MediaDownLoadHelper_1.default)().saveDocumentFromApi(message);
+                type = "media";
+            }
             if (message.Message.conversation ||
                 message.Message.imageMessage ||
                 message.Message.stickerMessage ||
-                message.Message.audioMessage) {
+                message.Message.audioMessage ||
+                message.Message.documentMessage) {
                 const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId);
                 const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
                 // Emit socket events for real-time updates
@@ -129,7 +141,7 @@ function ChatMessageHandler() {
     }
     function getChatId(message) {
         const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
-            ? message.Info.Sender
+            ? message.Info.SenderAlt
             : message.Info.Chat;
         return source?.match(/^[^@:]+/)?.[0] || "";
     }
@@ -166,8 +178,8 @@ function resolveMessagePreview(content) {
         return "[Sticker]";
     if (content.audioMessage)
         return "[Audio]";
-    if (content.documentMessage?.title)
-        return `[Document] ${content.documentMessage.title}`;
+    if (content.documentMessage)
+        return `[Document] ${content.documentMessage.fileName || content.documentMessage.title || 'File'}`;
     return "";
 }
 function isGroupConversation(con) {

@@ -298,6 +298,55 @@ function initializeSocketIO(server) {
                 });
             }
         });
+        socket.on('send_document', async (data) => {
+            const tempDir = 'docs';
+            const tempPath = path_1.default.join(tempDir, data.filename);
+            try {
+                console.log('Received document via Socket.IO:', data.message);
+                if (!fs_1.default.existsSync(tempDir)) {
+                    fs_1.default.mkdirSync(tempDir, { recursive: true });
+                }
+                const buffer = Buffer.from(data.documentData, 'base64');
+                fs_1.default.writeFileSync(tempPath, buffer);
+                const mockFile = {
+                    path: tempPath,
+                    filename: data.filename,
+                    mimetype: data.mimetype || 'application/octet-stream'
+                };
+                const currentUser = {
+                    id: socket.userId || 'unknown',
+                    username: socket.userId || 'unknown',
+                    email: undefined
+                };
+                const result = await (await messageSender).sendDocument(data.message, mockFile, currentUser);
+                if (!result.success) {
+                    socket.emit('message_error', {
+                        success: false,
+                        error: result.error || 'Failed to send document',
+                        originalMessage: data.message
+                    });
+                    return;
+                }
+                socket.emit('message_sent', {
+                    success: true,
+                    messageId: result.messageId,
+                    originalMessage: data.message
+                });
+            }
+            catch (error) {
+                console.error('Error handling send_document:', error);
+                try {
+                    if (fs_1.default.existsSync(tempPath))
+                        fs_1.default.unlinkSync(tempPath);
+                }
+                catch (_) { }
+                socket.emit('message_error', {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Internal server error',
+                    originalMessage: data?.message
+                });
+            }
+        });
         socket.on('cancel_recording', async (data) => {
             try {
                 console.log('Recording cancelled:', data);
@@ -507,8 +556,6 @@ function emitChatUpdate(chatData) {
             lastMessage: chatData.lastMessage,
             lastMessageTime: chatData.lastMessageTime,
             unreadCount: chatData.unreadCount !== undefined ? chatData.unreadCount : (chatData.unReadCount !== undefined ? chatData.unReadCount : 0),
-            isTyping: false,
-            isOnline: true,
             phone: chatData.phone,
             contactId: chatData.contactId,
             tagsname: chatData.tagsname
@@ -517,6 +564,7 @@ function emitChatUpdate(chatData) {
 }
 function emitChatPresence(presenceData) {
     if (globalIO) {
+        // Send presence only to the specific conversation room
         globalIO.to(`conversation_${presenceData.chatId}`).emit('chat_presence', {
             chatId: presenceData.chatId,
             userId: presenceData.userId,

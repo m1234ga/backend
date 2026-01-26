@@ -152,8 +152,9 @@ app.use((req: Request, res: Response, next) => {
 // app.use(sessionConfig);
 
 app.use('/imgs', express.static('imgs'));
-app.use('/audio', express.static('audio'));
-app.use('/video', express.static('video'));
+app.use('/audio', express.static('Audio'));
+app.use('/video', express.static('Video'));
+app.use('/docs', express.static('docs'));
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
 

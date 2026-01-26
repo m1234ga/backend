@@ -47,11 +47,17 @@ function ChatMessageHandler() {
                     createdAt
                 );
 
-                // Fetch updated reactions for this message to emit
-                const updatedReactions = await DBHelper().getMessageReactions(messageId);
-                emitReactionUpdate(chatId, messageId, updatedReactions);
-            } catch (err) {
-                console.error("Error handling reaction hook:", err);
+                // Fetch updated reactions with contact names to emit
+                const updatedReactions = await DBHelper().getMessageReactionsWithNames(messageId);
+                emitReactionUpdate(chatId, messageId, updatedReactions as any[]);
+            } catch (err: any) {
+                // If it's a foreign key constraint error (P2003), it means the original message isn't in our DB yet.
+                // This can happen during HistorySync. We'll simply skip the reaction for now.
+                if (err.code === 'P2003') {
+                    console.warn(`Skipping reaction mapping: message ${messageId} not found in database.`);
+                } else {
+                    console.error("Error handling reaction hook:", err);
+                }
             }
             return;
         }
@@ -67,12 +73,16 @@ function ChatMessageHandler() {
             } else if (message.Message.audioMessage) {
                 await MediaDownLoadHelper().saveAudioFromApi(message);
                 type = "audio";
+            } else if (message.Message.documentMessage) {
+                await MediaDownLoadHelper().saveDocumentFromApi(message);
+                type = "media";
             }
             if (
                 message.Message.conversation ||
                 message.Message.imageMessage ||
                 message.Message.stickerMessage ||
-                message.Message.audioMessage
+                message.Message.audioMessage ||
+                message.Message.documentMessage
             ) {
                 const chatResult = await DBHelper().upsertChat(
                     chatId,
@@ -200,7 +210,7 @@ function ChatMessageHandler() {
     }
     function getChatId(message: any) {
         const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
-            ? message.Info.Sender
+            ? message.Info.SenderAlt
             : message.Info.Chat;
 
         return source?.match(/^[^@:]+/)?.[0] || "";
@@ -237,8 +247,8 @@ function resolveMessagePreview(content: any): string {
     if (content.videoMessage) return "[Video]";
     if (content.stickerMessage) return "[Sticker]";
     if (content.audioMessage) return "[Audio]";
-    if (content.documentMessage?.title)
-        return `[Document] ${content.documentMessage.title}`;
+    if (content.documentMessage)
+        return `[Document] ${content.documentMessage.fileName || content.documentMessage.title || 'File'}`;
     return "";
 }
 

@@ -100,6 +100,8 @@ function DBHelper() {
     async function upsertMessage(message, chatId, type, passedMediaPath, userId) {
         let content = message.Message.conversation ||
             message.Message.extendedTextMessage?.text ||
+            message.Message.documentMessage?.title ||
+            message.Message.documentMessage?.fileName ||
             "";
         var contactId = "";
         let mediaPath = passedMediaPath || message.Info?.mediaPath || null;
@@ -108,7 +110,10 @@ function DBHelper() {
         }
         // Determine media path based on message type if not already provided
         if (!mediaPath) {
-            if (type == "sticker" || type == "image") {
+            if (type == "image") {
+                mediaPath = `imgs/${message.Info.ID}.jpeg`;
+            }
+            else if (type == "sticker") {
                 mediaPath = `imgs/${message.Info.ID}.webp`;
             }
             else if (type == "audio") {
@@ -116,6 +121,12 @@ function DBHelper() {
             }
             else if (type == "video") {
                 mediaPath = `video/${message.Info.ID}.mp4`;
+            }
+            else if (type == "document" || type == "media") {
+                const docName = message.Message.documentMessage?.fileName ||
+                    message.Message.documentMessage?.title ||
+                    `${message.Info.ID}.${message.Message.documentMessage?.mimetype?.split('/')[1] || 'bin'}`;
+                mediaPath = `docs/${docName}`;
             }
         }
         // Extract replyToMessageId from various possible locations in the message object
@@ -281,15 +292,25 @@ function DBHelper() {
             throw err;
         }
     }
-    async function getMessageReactions(messageId) {
+    async function getMessageReactionsWithNames(messageId) {
         try {
-            return await prismaClient_1.default.message_reactions.findMany({
-                where: { messageId },
-                orderBy: { createdAt: 'asc' }
-            });
+            const reactions = await prismaClient_1.default.$queryRawUnsafe(`
+        SELECT 
+          mr.id, 
+          mr."messageId", 
+          mr.participant, 
+          mr.emoji, 
+          mr."createdAt",
+          COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant) as "contactName"
+        FROM message_reactions mr
+        LEFT JOIN cleaned_contacts cc ON SPLIT_PART(mr.participant, '@', 1) = cc.phone
+        WHERE mr."messageId" = $1
+        ORDER BY mr."createdAt" ASC
+      `, messageId);
+            return reactions;
         }
         catch (err) {
-            console.error("Error fetching message reactions:", err);
+            console.error("Error fetching message reactions with names:", err);
             throw err;
         }
     }
@@ -301,7 +322,7 @@ function DBHelper() {
         upsertGroup,
         updateMessageStatus,
         upsertReaction,
-        getMessageReactions,
+        getMessageReactionsWithNames,
     };
 }
 function normalizeUpsertOptions(statusOrOptions) {

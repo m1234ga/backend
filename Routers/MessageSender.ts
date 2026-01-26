@@ -46,7 +46,8 @@ export default async function MessageSender() {
         extendedTextMessage: messageType === 'text' ? { text: content } : undefined,
         imageMessage: messageType === 'image' ? { caption: content, mimetype: 'image/jpeg' } : undefined,
         audioMessage: messageType === 'audio' ? { mimetype: 'audio/ogg' } : undefined,
-        stickerMessage: messageType === 'sticker' ? {} : undefined
+        stickerMessage: messageType === 'sticker' ? {} : undefined,
+        documentMessage: (messageType === 'document' || messageType === 'media') ? { fileName: content, title: content, mimetype: 'application/octet-stream' } : undefined
       }
     };
   }
@@ -771,11 +772,101 @@ export default async function MessageSender() {
     }
   }
 
+  async function sendDocument(message: ChatMessage, documentFile: any, currentUser?: { id: string, username: string, email?: string }) {
+    try {
+      if (!message || !message.phone || !documentFile) {
+        return {
+          success: false,
+          error: 'Missing required fields: phone, message, and document file are required',
+        };
+      }
+
+      // Read the document file
+      const documentBuffer = fs.readFileSync(documentFile.path);
+      const base64Document = documentBuffer.toString('base64');
+
+      const response = await fetch(process.env.WUZAPI + '/chat/send/document', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          token: process.env.WUZAPI_Token || "",
+        },
+        body: JSON.stringify({
+          Phone: message.phone,
+          Document: 'data:application/octet-stream;base64,' + base64Document,
+          FileName: documentFile.filename || 'file.txt',
+          Id: uuidv4(),
+          ContextInfo: buildForwardContext(message)
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('WhatsApp API error (document):', response.status, errorText);
+        return {
+          success: false,
+          error: 'Failed to send document via WhatsApp API',
+          details: errorText,
+        };
+      }
+
+      const result = await response.json();
+      const messageId = result.data?.Id || result.data?.id || uuidv4();
+      const timestampSec = result.data?.Timestamp || result.data?.TimeStamp || Math.floor(Date.now() / 1000);
+      const timestamp = adjustToConfiguredTimezone(new Date(timestampSec * 1000));
+
+      const dbMessageObject = createMessageObject(messageId, message, 'media', message.message || documentFile.filename || '[Document]', timestamp, message.replyToMessageId);
+
+      await DBHelper().upsertChat(
+        message.chatId,
+        message.message || '[Document]',
+        timestamp,
+        0, false, false,
+        message.pushName ?? "",
+        message.ContactId || message.phone,
+        currentUser?.id || 'current_user',
+        undefined,
+        true
+      );
+
+      const mediaPath = `docs/${documentFile.filename}`;
+      const savedMsg = await DBHelper().upsertMessage(dbMessageObject, message.chatId, 'media', mediaPath, currentUser?.id);
+
+      if (savedMsg) {
+        const tempId = message.id;
+        emitNewMessage({ ...savedMsg, tempId });
+        emitMessageUpdate({
+          id: savedMsg.id,
+          tempId,
+          timestamp: timestamp.toISOString(),
+          timeStamp: timestamp,
+          chatId: message.chatId,
+          messageType: 'media'
+        });
+      }
+
+      return {
+        success: true,
+        message: 'Document sent successfully',
+        data: result,
+        messageId,
+      };
+    } catch (error) {
+      console.error('Error in sendDocument:', error);
+      return {
+        success: false,
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
   return {
     sendMessage,
     sendVideo,
     sendImage,
     sendAudio,
+    sendDocument,
     createMessageTemplate,
     sendReaction
   }

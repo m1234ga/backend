@@ -246,7 +246,7 @@ router.get('/api/GetMessages/:id', async (req, res) => {
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
                    WHERE m."chatId" = $1 AND m."timeStamp" < $2::timestamp 
                    ORDER BY m."timeStamp" DESC LIMIT $3`,
-          id, adjustToConfiguredTimezone(new Date(before)).toISOString(), limit
+          id, new Date(before).toISOString(), limit
         );
       } else {
         // Get last N messages (initial load) with pushName from chats
