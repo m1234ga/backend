@@ -66,7 +66,6 @@ function DBHelper() {
 
       // Logic for pushname:
       // Update if passed, not empty, and not from me.
-      // SQL: WHEN EXCLUDED."pushname" IS NOT NULL AND EXCLUDED."pushname" <> '' AND $13 = FALSE
       let newPushname = existingChat.pushname;
       if (pushname && pushname !== "" && !isFromMe) {
         newPushname = pushname;
@@ -81,10 +80,10 @@ function DBHelper() {
           isOnline: isOnline,
           isTyping: isTypingStr,
           pushname: newPushname,
-          contactId,
-          userId,
+          contactId: contactId || existingChat.contactId,
+          userId: userId || existingChat.userId,
           status: normalizedOptions.status || existingChat.status || "open",
-          participants: participantsVal as any, // Cast to any to satisfy InputJsonValue if needed
+          participants: participantsVal as any,
         },
       });
       return [updated];
@@ -100,14 +99,11 @@ function DBHelper() {
               ? unreadCount
               : isFromMe
                 ? 0
-                : 1, // If not provided and creating, default logic? SQL default is 0. But if implicit increment applies on create?
-          // SQL INSERT VALUES used $4. If $4 was null, it would insert NULL?
-          // Table definition unReadCount Int? @default(0).
-          // If we pass NULL to create, it uses default? No, explicit null is null.
-          // I will assume if passed null/undefined, we start with 1 if not from me, 0 if from me.
+                : 1,
           isOnline,
           isTyping: isTypingStr,
-          pushname,
+          // For new chats: Use pushname if not from me, else fallback to id (phone)
+          pushname: (!isFromMe && pushname && pushname !== "") ? pushname : id,
           contactId,
           userId,
           status,

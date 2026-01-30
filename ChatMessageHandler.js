@@ -70,7 +70,7 @@ function ChatMessageHandler() {
                 message.Message.stickerMessage ||
                 message.Message.audioMessage ||
                 message.Message.documentMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
                 const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
                 // Emit socket events for real-time updates
                 if (messageResult) {
@@ -81,7 +81,7 @@ function ChatMessageHandler() {
                 }
             }
             if (message.Message.extendedTextMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, new Date(message.Info.Timestamp), message.unreadCount, false, false, chatId, message.Info.ID, userId);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
                 const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
                 // Emit socket events for real-time updates
                 if (messageResult) {

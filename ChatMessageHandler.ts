@@ -93,7 +93,9 @@ function ChatMessageHandler() {
                     false,
                     message.Info.PushName,
                     message.Info.ID,
-                    userId
+                    userId,
+                    undefined,
+                    message.Info.IsFromMe
                 );
                 const messageResult = await DBHelper().upsertMessage(
                     message,
@@ -117,9 +119,11 @@ function ChatMessageHandler() {
                     message.unreadCount,
                     false,
                     false,
-                    chatId,
+                    message.Info.PushName,
                     message.Info.ID,
-                    userId
+                    userId,
+                    undefined,
+                    message.Info.IsFromMe
                 );
                 const messageResult = await DBHelper().upsertMessage(
                     message,

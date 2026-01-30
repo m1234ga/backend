@@ -8,5 +8,5 @@
 *.pem
 *.key
 *.crt
-
+*.env
 /src/generated/prisma
