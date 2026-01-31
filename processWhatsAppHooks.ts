@@ -40,7 +40,7 @@ class processWhatsAppHooks implements HooksType {
       if (obj.event && obj.event) {
         const presenceData = obj.event;
         const chatId = (presenceData.Chat || presenceData.Sender)?.match(/^[^@:]+/)?.[0] || "";
-        const userId = presenceData.SenderAlt || presenceData.Sender?.match(/^[^@:]+/)?.[0] || "";
+        const userId = presenceData.Sender?.match(/^[^@:]+/)?.[0] || "";
 
         // Extract presence information
         const isOnline = presenceData.State === 'available' || presenceData.State === 'online';

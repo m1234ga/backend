@@ -126,7 +126,7 @@ function ChatMessageHandler() {
                 }
                 message.Info = {
                     Chat: message.message.key.remoteJID,
-                    Timestamp: new Date(Number(message.message.messageTimestamp) * 1000).toUTCString(),
+                    Timestamp: new Date(Number(message.message.messageTimestamp) * 1000).toISOString(),
                     ID: message.message.key.ID,
                     IsFromMe: message.message.key.fromMe,
                     SenderAlt: message.message.key.participant,
@@ -140,17 +140,10 @@ function ChatMessageHandler() {
         }
     }
     function getChatId(message) {
-        const info = message?.Info;
-        if (!info)
-            return "";
-        const jid = info.IsFromMe === false &&
-            info.IsGroup === false &&
-            typeof info.SenderAlt === "string"
-            ? info.SenderAlt
-            : info.Chat;
-        if (typeof jid !== "string")
-            return "";
-        return jid.split(/[@:]/)[0];
+        const source = (!message.Info.IsFromMe && message.Info.Sender && !message.Info.IsGroup)
+            ? message.Info.Sender
+            : message.Info.Chat;
+        return source?.match(/^[^@:]+/)?.[0] || "";
     }
     async function handleMessageStatusUpdate(event) {
         const messageIds = event.MessageIDs;
