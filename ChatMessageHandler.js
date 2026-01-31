@@ -140,10 +140,17 @@ function ChatMessageHandler() {
         }
     }
     function getChatId(message) {
-        const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
-            ? message.Info.SenderAlt
-            : message.Info.Chat;
-        return source?.match(/^[^@:]+/)?.[0] || "";
+        const info = message?.Info;
+        if (!info)
+            return "";
+        const jid = info.IsFromMe === false &&
+            info.IsGroup === false &&
+            typeof info.SenderAlt === "string"
+            ? info.SenderAlt
+            : info.Chat;
+        if (typeof jid !== "string")
+            return "";
+        return jid.split(/[@:]/)[0];
     }
     async function handleMessageStatusUpdate(event) {
         const messageIds = event.MessageIDs;
