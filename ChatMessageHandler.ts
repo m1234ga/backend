@@ -212,12 +212,19 @@ function ChatMessageHandler() {
                 });
         }
     }
-    function getChatId(message: any) {
-        const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
-            ? message.Info.SenderAlt
-            : message.Info.Chat;
+    function getChatId(message: any): string {
+        const info = message?.Info;
+        if (!info) return "";
 
-        return source?.match(/^[^@:]+/)?.[0] || "";
+        const jid =
+            info.IsFromMe === false &&
+                info.IsGroup === false &&
+                typeof info.SenderAlt === "string"
+                ? info.SenderAlt
+                : info.Chat;
+
+        if (typeof jid !== "string") return "";
+        return jid.split(/[@:]/)[0];
     }
 
     async function handleMessageStatusUpdate(event: any) {
