@@ -129,7 +129,7 @@ function ChatMessageHandler() {
                     Timestamp: new Date(Number(message.message.messageTimestamp) * 1000).toISOString(),
                     ID: message.message.key.ID,
                     IsFromMe: message.message.key.fromMe,
-                    SenderAlt: message.message.key.participant,
+                    SenderAlt: message.message.key.remoteJID,
                     PushName: message.pushname ||
                         message.message?.pushName ||
                         resolveConversationName(con),
@@ -140,8 +140,8 @@ function ChatMessageHandler() {
         }
     }
     function getChatId(message) {
-        const source = (!message.Info.IsFromMe && message.Info.Sender && !message.Info.IsGroup)
-            ? message.Info.Sender
+        const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
+            ? message.Info.SenderAlt
             : message.Info.Chat;
         return source?.match(/^[^@:]+/)?.[0] || "";
     }
