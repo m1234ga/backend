@@ -27,7 +27,7 @@ class processWhatsAppHooks {
         (0, ChatMessageHandler_1.default)().ChatMessageHandler(obj.event, obj.instanceName);
     }
     SyncHistory(obj) {
-        if (obj.event && obj.event.Data && obj.event.Data.conversations && obj.event.Data.syncType == 3) {
+        if (obj.event && obj.event.Data && obj.event.Data.conversations && (obj.event.Data.syncType == 3 || obj.event.Data.syncType == 4)) {
             var conversations = obj.event.Data.conversations.filter((a) => a.ID != "status@broadcast");
             conversations.forEach(async (con) => {
                 await (0, ChatMessageHandler_1.default)().ChatupsertHelper(con, obj.instanceName);

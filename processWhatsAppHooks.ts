@@ -26,7 +26,7 @@ class processWhatsAppHooks implements HooksType {
     ChatMessageHandler().ChatMessageHandler(obj.event, obj.instanceName);
   }
   SyncHistory(obj: any): void {
-    if (obj.event && obj.event.Data && obj.event.Data.conversations && obj.event.Data.syncType == 3) {
+    if (obj.event && obj.event.Data && obj.event.Data.conversations && (obj.event.Data.syncType == 3 || obj.event.Data.syncType == 4)) {
       var conversations = obj.event.Data.conversations.filter((a: any) => a.ID != "status@broadcast");
       conversations.forEach(async (con: any) => {
         await ChatMessageHandler().ChatupsertHelper(con, obj.instanceName);
