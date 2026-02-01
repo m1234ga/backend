@@ -9,12 +9,12 @@
 export function getTimezoneOffsetHours(): number {
     const envOffset = process.env.TIMEZONE_OFFSET_HOURS;
     if (envOffset !== undefined && envOffset !== '') {
-        const parsed = parseFloat(envOffset);
-        if (!isNaN(parsed)) {
+        const parsed = Number(envOffset);
+        if (Number.isFinite(parsed)) {
             return parsed;
         }
     }
-    return 2; // Default to Cairo timezone (UTC+2)
+    return 0; // Default to UTC
 }
 
 /**

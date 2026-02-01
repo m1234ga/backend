@@ -143,8 +143,8 @@ app.use((req, res, next) => {
 // Configure session (removed as we use JWT)
 // app.use(sessionConfig);
 app.use('/imgs', express_1.default.static('imgs'));
-app.use('/audio', express_1.default.static('Audio'));
-app.use('/video', express_1.default.static('Video'));
+app.use('/audio', express_1.default.static('audio'));
+app.use('/video', express_1.default.static('video'));
 app.use('/docs', express_1.default.static('docs'));
 app.use(express_1.default.json({ limit: '200mb' }));
 app.use(express_1.default.urlencoded({ limit: '200mb', extended: true }));

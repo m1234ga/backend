@@ -17,7 +17,7 @@ function ChatMessageHandler() {
     async function ChatMessageHandler(message: any, token: string) {
         // Adjust timestamp to configured timezone
         if (message?.Info?.Timestamp) {
-            message.Info.Timestamp = adjustToConfiguredTimezone(new Date(message.Info.Timestamp)).toISOString();
+            message.Info.Timestamp = adjustToConfiguredTimezone(new Date(message.Info.Timestamp));
         }
 
         // Skip broadcast status messages
@@ -34,7 +34,7 @@ function ChatMessageHandler() {
             const reactionPrimaryKey = message.Info.ID; // The unique ID of the reaction itself
             const participant = (reaction.key?.remoteJID || "").split("@")[0];
             const emoji = reaction.text;
-            const createdAt = new Date(message.Info.Timestamp);
+            const createdAt = adjustToConfiguredTimezone(new Date(message.Info.Timestamp));
 
             try {
                 // Ensure message exists or handle gracefully? 
@@ -87,7 +87,7 @@ function ChatMessageHandler() {
                 const chatResult = await DBHelper().upsertChat(
                     chatId,
                     resolveMessagePreview(message.Message),
-                    new Date(message.Info.Timestamp),
+                    adjustToConfiguredTimezone(new Date(message.Info.Timestamp)),
                     message.unreadCount,
                     false,
                     false,
@@ -115,7 +115,7 @@ function ChatMessageHandler() {
                 const chatResult = await DBHelper().upsertChat(
                     chatId,
                     message.Message.extendedTextMessage.text,
-                    new Date(message.Info.Timestamp),
+                    adjustToConfiguredTimezone(new Date(message.Info.Timestamp)),
                     message.unreadCount,
                     false,
                     false,

@@ -83,7 +83,7 @@ function DBHelper() {
                     isOnline,
                     isTyping: isTypingStr,
                     // For new chats: Use pushname if not from me, else fallback to id (phone)
-                    pushname: (!isFromMe && pushname && pushname !== "") ? pushname : id,
+                    pushname: (!isFromMe && pushname && pushname !== "") ? pushname : '',
                     contactId,
                     userId,
                     status,

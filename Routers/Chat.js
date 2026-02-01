@@ -114,7 +114,10 @@ async function callWuz(path, method = 'GET', body) {
     if (!base)
         throw new Error('WUZAPI env not configured');
     const url = `${base}/${path.replace(/^\//, '')}`;
+    console.log(`🚀 WuzAPI Request: [${method}] ${url}`);
     const headers = { 'Content-Type': 'application/json' };
+    if (body)
+        console.log('📦 Request Body:', JSON.stringify(body));
     if (process.env.WUZAPI_Token)
         headers.token = process.env.WUZAPI_Token;
     const resp = await fetch(url, {
@@ -149,6 +152,23 @@ router.get('/api/GetWuzPresence/:phone', async (req, res) => {
     }
     catch (error) {
         console.error('Error fetching Wuz presence:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/user/info', async (req, res) => {
+    try {
+        const { Phone } = req.body;
+        if (!Phone || !Array.isArray(Phone)) {
+            return res.status(400).json({ error: 'Phone array is required' });
+        }
+        const formattedPhones = Phone.map((p) => p.includes('@') ? p : `${p}@s.whatsapp.net`);
+        const result = await callWuz('user/info', 'POST', { Phone: formattedPhones });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error fetching Wuz user info batch:', error);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
@@ -284,9 +304,10 @@ router.get('/api/GetMessages/:id', async (req, res) => {
               FROM messages m 
               LEFT JOIN chats c ON m."chatId" = c.id
               LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
+              ORDER BY m."timeStamp" DESC
           `);
         }
-        res.json({ messages: messages.reverse() }); // Reverse to show oldest first
+        res.json({ messages: messages }); // Return newest first as expected by frontend
     }
     catch (error) {
         console.error('Error fetching messages:', error);
@@ -685,7 +706,8 @@ router.get('/api/GetArchivedChats/:userId', async (req, res) => {
         const chats = await prismaClient_1.default.$queryRawUnsafe(`
       SELECT *
       FROM chatsInfo 
-      WHERE isArchived = TRUE
+      WHERE "isarchived" = TRUE
+      ORDER BY "lastMessageTime" DESC
     `);
         res.json(chats);
     }

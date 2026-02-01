@@ -11,7 +11,7 @@ function ChatMessageHandler() {
     async function ChatMessageHandler(message, token) {
         // Adjust timestamp to configured timezone
         if (message?.Info?.Timestamp) {
-            message.Info.Timestamp = (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)).toISOString();
+            message.Info.Timestamp = (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp));
         }
         // Skip broadcast status messages
         if (message?.Info?.Chat === "status@broadcast") {
@@ -25,7 +25,7 @@ function ChatMessageHandler() {
             const reactionPrimaryKey = message.Info.ID; // The unique ID of the reaction itself
             const participant = (reaction.key?.remoteJID || "").split("@")[0];
             const emoji = reaction.text;
-            const createdAt = new Date(message.Info.Timestamp);
+            const createdAt = (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp));
             try {
                 // Ensure message exists or handle gracefully? 
                 // For now, swapping ensures we target the right foreign key.
@@ -70,7 +70,7 @@ function ChatMessageHandler() {
                 message.Message.stickerMessage ||
                 message.Message.audioMessage ||
                 message.Message.documentMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
                 const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
                 // Emit socket events for real-time updates
                 if (messageResult) {
@@ -81,7 +81,7 @@ function ChatMessageHandler() {
                 }
             }
             if (message.Message.extendedTextMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, new Date(message.Info.Timestamp), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
                 const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
                 // Emit socket events for real-time updates
                 if (messageResult) {
