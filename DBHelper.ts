@@ -349,6 +349,35 @@ function DBHelper() {
     }
   }
 
+  async function upsertCleanedContact(
+    phone: string,
+    pushName?: string,
+    chatId?: string
+  ) {
+    try {
+      // Remove @s.whatsapp.net suffix if present
+      const cleanPhone = phone.split('@')[0];
+
+      const updateData: any = {};
+      if (pushName) updateData.push_name = pushName;
+      if (chatId) updateData.chatId = chatId;
+
+      const result = await prisma.cleaned_contacts.upsert({
+        where: { phone: cleanPhone },
+        update: updateData,
+        create: {
+          phone: cleanPhone,
+          push_name: pushName || null,
+          chatId: chatId || null,
+        } as any,
+      });
+      return result;
+    } catch (err) {
+      console.error("Error upserting cleaned contact:", err);
+      throw err;
+    }
+  }
+
   return {
     GetUser,
     upsertChat,
@@ -358,6 +387,7 @@ function DBHelper() {
     updateMessageStatus,
     upsertReaction,
     getMessageReactionsWithNames,
+    upsertCleanedContact,
   };
 }
 

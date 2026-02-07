@@ -27,11 +27,18 @@ class processWhatsAppHooks {
         (0, ChatMessageHandler_1.default)().ChatMessageHandler(obj.event, obj.instanceName);
     }
     SyncHistory(obj) {
-        if (obj.event && obj.event.Data && obj.event.Data.conversations && (obj.event.Data.syncType == 3 || obj.event.Data.syncType == 4)) {
-            var conversations = obj.event.Data.conversations.filter((a) => a.ID != "status@broadcast");
+        const data = obj.event?.Data;
+        if (!data)
+            return;
+        if (data.conversations && (data.syncType == 3 || data.syncType == 4)) {
+            var conversations = data.conversations.filter((a) => a.ID != "status@broadcast");
             conversations.forEach(async (con) => {
                 await (0, ChatMessageHandler_1.default)().ChatupsertHelper(con, obj.instanceName);
             });
+        }
+        // Process contact mappings using the centralized handler
+        if (data.phoneNumberToLidMappings || data.pushnames) {
+            (0, ChatMessageHandler_1.default)().processContactMappings(data).catch((err) => console.error("Error processing contact mappings:", err));
         }
     }
     ChatPresence(obj) {

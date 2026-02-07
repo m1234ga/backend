@@ -213,9 +213,28 @@ function ChatMessageHandler() {
         }
     }
     function getChatId(message: any) {
-        const source = (!message.Info.IsFromMe && message.Info.SenderAlt && !message.Info.IsGroup)
-            ? message.Info.SenderAlt
-            : message.Info.Chat;
+        var source = "";
+        if (!message.Info.IsFromMe && !message.Info.IsGroup) {
+            if (message.Info.SenderAlt.includes("@s.whatsapp.net")) {
+                source = message.Info.Sender;
+            } else {
+                source = message.Info.SenderAlt;
+            }
+
+            // Insert contact into cleaned_contacts table
+            const phone = source?.match(/^[^@:]+/)?.[0] || "";
+            const pushName = message.Info.PushName || "";
+            const chatId = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
+
+            if (phone) {
+                // Fire and forget - don't await to avoid blocking
+                DBHelper().upsertCleanedContact(phone, pushName, chatId).catch(err => {
+                    console.error("Error upserting cleaned contact:", err);
+                });
+            }
+        } else {
+            source = message.Info.Chat;
+        }
 
         return source?.match(/^[^@:]+/)?.[0] || "";
     }
@@ -239,7 +258,41 @@ function ChatMessageHandler() {
         ChatMessageHandler,
         ChatupsertHelper,
         handleMessageStatusUpdate,
+        processContactMappings,
     };
+
+    async function processContactMappings(data: any) {
+        if (!data || !data.phoneNumberToLidMappings || !data.pushnames) return;
+
+        const { phoneNumberToLidMappings, pushnames } = data;
+
+        // Create a map for quick pushname lookup
+        const pushNameMap: { [key: string]: string } = {};
+        pushnames.forEach((p: any) => {
+            if (p.ID && p.pushname) {
+                pushNameMap[p.ID] = p.pushname;
+            }
+        });
+
+        for (const mapping of phoneNumberToLidMappings) {
+            const pnJID = mapping.pnJID;
+            const lidJID = mapping.lidJID;
+
+            if (!pnJID || !lidJID) continue;
+
+            const pushName = pushNameMap[pnJID] || "";
+
+            // Clean IDs similar to getChatId logic
+            const phone = pnJID.match(/^[^@:]+/)?.[0] || "";
+            const chatId = lidJID.match(/^[^@:]+/)?.[0] || "";
+
+            if (phone && chatId) {
+                await DBHelper().upsertCleanedContact(phone, pushName, chatId).catch((err: any) => {
+                    console.error("Error upserting cleaned contact from mappings:", err);
+                });
+            }
+        }
+    }
 }
 
 function resolveMessagePreview(content: any): string {

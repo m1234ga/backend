@@ -38,7 +38,6 @@ model chatTags {
   createdBy    String?
 }
 
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model chat_status_details {
   id         Int       @id @default(autoincrement())
   chat_id    String    @db.VarChar(255)
@@ -93,6 +92,7 @@ model cleaned_contacts {
   full_name     String?
   push_name     String?
   business_name String?
+  chatId        String? @db.VarChar(50)
 }
 
 model contacts {
@@ -131,7 +131,6 @@ model groups {
   name String?
 }
 
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model messageTemplates {
   id        Int       @id @default(autoincrement())
   name      String    @db.VarChar(255)
@@ -172,7 +171,6 @@ model message_reactions {
   @@unique([messageId, participant], map: "unique_reaction_per_user_message")
 }
 
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model messages {
   id                String              @id(map: "chatmessages_pkey") @db.VarChar(50)
   chatId            String?             @db.VarChar(50)
@@ -230,7 +228,6 @@ model users {
   hmac_key          Bytes?
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_app_state_mutation_macs {
   jid                         String
   name                        String
@@ -253,7 +250,6 @@ model whatsmeow_app_state_sync_keys {
   @@id([jid, key_id])
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_app_state_version {
   jid                               String
   name                              String
@@ -289,7 +285,6 @@ model whatsmeow_contacts {
   @@id([our_jid, their_jid])
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_device {
   jid                           String                          @id
   lid                           String?
@@ -321,7 +316,6 @@ model whatsmeow_device {
   whatsmeow_sessions            whatsmeow_sessions[]
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_event_buffer {
   our_jid          String
   ciphertext_hash  Bytes
@@ -333,7 +327,6 @@ model whatsmeow_event_buffer {
   @@id([our_jid, ciphertext_hash])
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_identity_keys {
   our_jid          String
   their_id         String
@@ -359,7 +352,6 @@ model whatsmeow_message_secrets {
   @@id([our_jid, chat_jid, sender_jid, message_id])
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model whatsmeow_pre_keys {
   jid              String
   key_id           Int
