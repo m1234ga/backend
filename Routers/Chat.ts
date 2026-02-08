@@ -100,7 +100,7 @@ router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
       baseSql += ' WHERE ci.status = $1';
       params.push(status);
     }
-    baseSql += ' ORDER BY ci."lastMessageTime" DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+    baseSql += ' ORDER BY ci."lastMessageTime" DESC, ci.id DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
 
     const chats = await prisma.$queryRawUnsafe(baseSql, ...params);
@@ -256,7 +256,7 @@ router.get('/api/GetMessages/:id', async (req, res) => {
               'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
             ))
             FROM message_reactions mr
-            LEFT JOIN cleaned_contacts cc ON SPLIT_PART(mr.participant, '@', 1) = cc.phone
+            LEFT JOIN cleaned_contacts cc ON mr.participant = cc.phone
             WHERE mr."messageId" = m.id
           ) as reactions
                    FROM messages m 
@@ -287,7 +287,7 @@ router.get('/api/GetMessages/:id', async (req, res) => {
               'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
             ))
             FROM message_reactions mr
-            LEFT JOIN cleaned_contacts cc ON SPLIT_PART(mr.participant, '@', 1) = cc.phone
+            LEFT JOIN cleaned_contacts cc ON mr.participant = cc.phone
             WHERE mr."messageId" = m.id
           ) as reactions
                    FROM messages m 

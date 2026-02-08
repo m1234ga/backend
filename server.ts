@@ -176,7 +176,7 @@ if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
         baseSql += ' WHERE status = $1';
         params.push(status);
       }
-      baseSql += ' ORDER BY "lastMessageTime" DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+      baseSql += ' ORDER BY "lastMessageTime" DESC, id DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
       params.push(limit, offset);
 
       const result = await (global as any).pool.query(baseSql, params);

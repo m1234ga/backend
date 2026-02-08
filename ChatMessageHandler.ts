@@ -215,16 +215,25 @@ function ChatMessageHandler() {
     function getChatId(message: any) {
         var source = "";
         if (!message.Info.IsFromMe && !message.Info.IsGroup) {
+            let phoneRaw = "";
             if (message.Info.SenderAlt.includes("@s.whatsapp.net")) {
                 source = message.Info.Sender;
+                phoneRaw = message.Info.SenderAlt;
             } else {
                 source = message.Info.SenderAlt;
+                phoneRaw = message.Info.Sender;
             }
 
             // Insert contact into cleaned_contacts table
-            const phone = source?.match(/^[^@:]+/)?.[0] || "";
-            const pushName = message.Info.PushName || "";
+            const phone = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
+            const pushName = message.pushname || message.Info.PushName || "";
             const chatId = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
+
+            // Ensure message.Info.PushName is populated if found elsewhere
+            if (pushName) message.Info.PushName = pushName;
+
+            // Ensure message.Info.Sender matches the determined phone for upsertMessage
+            if (phoneRaw) message.Info.Sender = phoneRaw;
 
             if (phone) {
                 // Fire and forget - don't await to avoid blocking
