@@ -17,7 +17,7 @@ function ChatMessageHandler() {
         if (message?.Info?.Chat === "status@broadcast") {
             return;
         }
-        const chatId = getChatId(message);
+        const { chatId, phoneRaw, pushName } = getChatId(message);
         // Handle Reaction Messages
         if (message.Message?.reactionMessage) {
             const reaction = message.Message.reactionMessage;
@@ -70,8 +70,8 @@ function ChatMessageHandler() {
                 message.Message.stickerMessage ||
                 message.Message.audioMessage ||
                 message.Message.documentMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
-                const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, resolveMessagePreview(message.Message), (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, pushName || message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
+                const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type, undefined, userId, phoneRaw);
                 // Emit socket events for real-time updates
                 if (messageResult) {
                     (0, SocketEmits_1.emitNewMessage)(messageResult);
@@ -81,8 +81,8 @@ function ChatMessageHandler() {
                 }
             }
             if (message.Message.extendedTextMessage) {
-                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
-                const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type);
+                const chatResult = await (0, DBHelper_1.default)().upsertChat(chatId, message.Message.extendedTextMessage.text, (0, timezone_1.adjustToConfiguredTimezone)(new Date(message.Info.Timestamp)), message.unreadCount, false, false, pushName || message.Info.PushName, message.Info.ID, userId, undefined, message.Info.IsFromMe);
+                const messageResult = await (0, DBHelper_1.default)().upsertMessage(message, chatId, type, undefined, userId, phoneRaw);
                 // Emit socket events for real-time updates
                 if (messageResult) {
                     (0, SocketEmits_1.emitNewMessage)(messageResult);
@@ -141,8 +141,9 @@ function ChatMessageHandler() {
     }
     function getChatId(message) {
         var source = "";
+        let phoneRaw = "";
+        let pushName = message.pushname || message.Info.PushName || "";
         if (!message.Info.IsFromMe && !message.Info.IsGroup) {
-            let phoneRaw = "";
             if (message.Info.SenderAlt.includes("@s.whatsapp.net")) {
                 source = message.Info.Sender;
                 phoneRaw = message.Info.SenderAlt;
@@ -153,8 +154,7 @@ function ChatMessageHandler() {
             }
             // Insert contact into cleaned_contacts table
             const phone = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
-            const pushName = message.pushname || message.Info.PushName || "";
-            const chatId = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
+            const chatIdStr = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
             // Ensure message.Info.PushName is populated if found elsewhere
             if (pushName)
                 message.Info.PushName = pushName;
@@ -163,15 +163,17 @@ function ChatMessageHandler() {
                 message.Info.Sender = phoneRaw;
             if (phone) {
                 // Fire and forget - don't await to avoid blocking
-                (0, DBHelper_1.default)().upsertCleanedContact(phone, pushName, chatId).catch(err => {
+                (0, DBHelper_1.default)().upsertCleanedContact(phone, pushName, chatIdStr).catch(err => {
                     console.error("Error upserting cleaned contact:", err);
                 });
             }
         }
         else {
             source = message.Info.Chat;
+            phoneRaw = message.Info.Sender;
         }
-        return source?.match(/^[^@:]+/)?.[0] || "";
+        const chatId = source?.match(/^[^@:]+/)?.[0] || "";
+        return { chatId, phoneRaw, pushName };
     }
     async function handleMessageStatusUpdate(event) {
         const messageIds = event.MessageIDs;

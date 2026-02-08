@@ -119,7 +119,8 @@ function DBHelper() {
     chatId: string,
     type: string,
     passedMediaPath?: string,
-    userId?: string
+    userId?: string,
+    senderRaw?: string
   ) {
     let content =
       message.Message.conversation ||
@@ -132,7 +133,8 @@ function DBHelper() {
       passedMediaPath || message.Info?.mediaPath || null;
 
     if (!message.isFromMe) {
-      contactId = (message.Info.Sender || "").match(/^[^@:]+/)?.[0] || "";
+      const sender = senderRaw || message.Info?.Sender || "";
+      contactId = sender.match(/^[^@:]+/)?.[0] || "";
     }
 
     // Determine media path based on message type if not already provided

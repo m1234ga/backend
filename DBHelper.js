@@ -93,7 +93,7 @@ function DBHelper() {
             return [created];
         }
     }
-    async function upsertMessage(message, chatId, type, passedMediaPath, userId) {
+    async function upsertMessage(message, chatId, type, passedMediaPath, userId, senderRaw) {
         let content = message.Message.conversation ||
             message.Message.extendedTextMessage?.text ||
             message.Message.documentMessage?.title ||
@@ -102,7 +102,8 @@ function DBHelper() {
         var contactId = "";
         let mediaPath = passedMediaPath || message.Info?.mediaPath || null;
         if (!message.isFromMe) {
-            contactId = (message.Info.Sender || "").match(/^[^@:]+/)?.[0] || "";
+            const sender = senderRaw || message.Info?.Sender || "";
+            contactId = sender.match(/^[^@:]+/)?.[0] || "";
         }
         // Determine media path based on message type if not already provided
         if (!mediaPath) {

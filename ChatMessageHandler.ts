@@ -25,7 +25,7 @@ function ChatMessageHandler() {
             return;
         }
 
-        const chatId = getChatId(message);
+        const { chatId, phoneRaw, pushName } = getChatId(message);
 
         // Handle Reaction Messages
         if (message.Message?.reactionMessage) {
@@ -91,7 +91,7 @@ function ChatMessageHandler() {
                     message.unreadCount,
                     false,
                     false,
-                    message.Info.PushName,
+                    pushName || message.Info.PushName,
                     message.Info.ID,
                     userId,
                     undefined,
@@ -100,7 +100,10 @@ function ChatMessageHandler() {
                 const messageResult = await DBHelper().upsertMessage(
                     message,
                     chatId,
-                    type
+                    type,
+                    undefined,
+                    userId,
+                    phoneRaw
                 );
 
                 // Emit socket events for real-time updates
@@ -119,7 +122,7 @@ function ChatMessageHandler() {
                     message.unreadCount,
                     false,
                     false,
-                    message.Info.PushName,
+                    pushName || message.Info.PushName,
                     message.Info.ID,
                     userId,
                     undefined,
@@ -128,7 +131,10 @@ function ChatMessageHandler() {
                 const messageResult = await DBHelper().upsertMessage(
                     message,
                     chatId,
-                    type
+                    type,
+                    undefined,
+                    userId,
+                    phoneRaw
                 );
 
                 // Emit socket events for real-time updates
@@ -214,8 +220,10 @@ function ChatMessageHandler() {
     }
     function getChatId(message: any) {
         var source = "";
+        let phoneRaw = "";
+        let pushName = message.pushname || message.Info.PushName || "";
+
         if (!message.Info.IsFromMe && !message.Info.IsGroup) {
-            let phoneRaw = "";
             if (message.Info.SenderAlt.includes("@s.whatsapp.net")) {
                 source = message.Info.Sender;
                 phoneRaw = message.Info.SenderAlt;
@@ -226,8 +234,7 @@ function ChatMessageHandler() {
 
             // Insert contact into cleaned_contacts table
             const phone = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
-            const pushName = message.pushname || message.Info.PushName || "";
-            const chatId = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
+            const chatIdStr = source?.match(/^[^@:]+/)?.[0] || ""; // Cleaned source as chatId
 
             // Ensure message.Info.PushName is populated if found elsewhere
             if (pushName) message.Info.PushName = pushName;
@@ -237,15 +244,17 @@ function ChatMessageHandler() {
 
             if (phone) {
                 // Fire and forget - don't await to avoid blocking
-                DBHelper().upsertCleanedContact(phone, pushName, chatId).catch(err => {
+                DBHelper().upsertCleanedContact(phone, pushName, chatIdStr).catch(err => {
                     console.error("Error upserting cleaned contact:", err);
                 });
             }
         } else {
             source = message.Info.Chat;
+            phoneRaw = message.Info.Sender;
         }
 
-        return source?.match(/^[^@:]+/)?.[0] || "";
+        const chatId = source?.match(/^[^@:]+/)?.[0] || "";
+        return { chatId, phoneRaw, pushName };
     }
 
     async function handleMessageStatusUpdate(event: any) {
