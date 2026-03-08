@@ -4,10 +4,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 const express_1 = require("express");
 const DBConnection_1 = __importDefault(require("../DBConnection"));
-const timezone_1 = require("../utils/timezone");
+const timezone_1 = require("../src/utils/timezone");
 const router = (0, express_1.Router)();
-// Get reports data
-router.get('/api/reports', async (req, res) => {
+// Get reports data (mounted at /api/reports)
+router.get('/', async (req, res) => {
     try {
         const { dateRange = '7days' } = req.query;
         // Calculate date range
@@ -41,7 +41,7 @@ COUNT(*) as totalMessages,
   COUNT(CASE WHEN "isFromMe" = false THEN 1 END) as receivedMessages
       FROM messages
       WHERE "timeStamp" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
         // Query chats with current status from status details
         const chatsResult = await DBConnection_1.default.query(`
 SELECT
@@ -63,7 +63,7 @@ COUNT(DISTINCT c.id) as totalChats,
         ORDER BY chat_id, changed_at DESC
   ) csd ON c.id = csd.chat_id
       WHERE c."lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
         // Query messages for response time calculation (simplified)
         const responseTimeResult = await DBConnection_1.default.query(`
 SELECT
@@ -71,13 +71,13 @@ AVG(EXTRACT(EPOCH FROM("timeStamp" - "lastMessageTime")) / 60) as avgResponseTim
       FROM messages m
       JOIN chats c ON m."chatId" = c.id
       WHERE m."timeStamp" >= $1 AND m."isFromMe" = false
-  `, [startDate.toISOString()]);
+  `, [startDate]);
         // Query active agents (users who have sent messages)
         const agentsResult = await DBConnection_1.default.query(`
       SELECT COUNT(DISTINCT "userId") as activeAgents
       FROM chats
       WHERE "lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
         // Calculate average resolution time using status details table
         const resolutionTimeResult = await DBConnection_1.default.query(`
 SELECT
@@ -98,7 +98,7 @@ AVG(EXTRACT(EPOCH FROM(csd_closed.changed_at - csd_open.changed_at)) / 60) as av
           WHERE chat_id = c.id AND status = 'closed'
         )
       WHERE c."lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
         // Mock customer satisfaction (this would need a ratings table)
         const customerSatisfaction = 4.5;
         const stats = {

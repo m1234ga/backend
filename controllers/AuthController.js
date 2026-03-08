@@ -7,6 +7,25 @@ exports.AuthController = void 0;
 const uuid_1 = require("uuid");
 const DBConnection_1 = __importDefault(require("../DBConnection"));
 const auth_1 = require("../src/utils/auth");
+const setAuthCookie = (res, token) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie('auth_token', token, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/',
+    });
+};
+const clearAuthCookie = (res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.clearCookie('auth_token', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        path: '/',
+    });
+};
 class AuthController {
     static async register(req, res) {
         const { username, email, password, firstName, lastName } = req.body;
@@ -25,6 +44,8 @@ class AuthController {
          VALUES ($1, $2, $3, $4, $5, $6, 'user')`, [id, username, email, hashedPassword, firstName || '', lastName || '']);
             // Login immediately
             const token = (0, auth_1.generateToken)({ userId: id, username, role: 'user' });
+            await DBConnection_1.default.query('UPDATE app_users SET is_active = true, updated_at = NOW() WHERE id = $1', [id]);
+            setAuthCookie(res, token);
             res.status(201).json({
                 message: 'User created successfully',
                 token,
@@ -43,19 +64,26 @@ class AuthController {
         }
         try {
             const result = await DBConnection_1.default.query('SELECT * FROM app_users WHERE username = $1', [username]);
+            console.log('Login attempt for user:', username);
             const user = result.rows[0];
             if (!user) {
+                console.log('User not found:', username);
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
+            console.log('User found, comparing password...');
             const isMatch = await (0, auth_1.comparePassword)(password, user.password_hash);
             if (!isMatch) {
+                console.log('Password mismatch for user:', username);
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
+            console.log('Login successful for user:', username);
             const token = (0, auth_1.generateToken)({
                 userId: user.id,
                 username: user.username,
                 role: user.role
             });
+            await DBConnection_1.default.query('UPDATE app_users SET is_active = true, updated_at = NOW() WHERE id = $1', [user.id]);
+            setAuthCookie(res, token);
             res.json({
                 token,
                 user: {
@@ -83,7 +111,13 @@ class AuthController {
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
             }
+            const token = (0, auth_1.generateToken)({
+                userId: user.id,
+                username: user.username,
+                role: user.role,
+            });
             res.json({
+                token,
                 id: user.id,
                 username: user.username,
                 email: user.email,
@@ -96,6 +130,18 @@ class AuthController {
             console.error('Me error:', error);
             res.status(500).json({ error: 'Internal server error' });
         }
+    }
+    static async logout(req, res) {
+        try {
+            if (req.user?.userId) {
+                await DBConnection_1.default.query('UPDATE app_users SET is_active = false, updated_at = NOW() WHERE id = $1', [req.user.userId]);
+            }
+        }
+        catch (error) {
+            console.error('Logout state update error:', error);
+        }
+        clearAuthCookie(res);
+        res.status(200).json({ message: 'Logged out' });
     }
 }
 exports.AuthController = AuthController;

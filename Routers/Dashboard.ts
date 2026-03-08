@@ -1,11 +1,11 @@
 import { Router, Request, Response } from 'express';
 import pool from '../DBConnection';
-import { adjustToConfiguredTimezone } from '../utils/timezone';
+import { adjustToConfiguredTimezone } from '../src/utils/timezone';
 
 const router = Router();
 
-// Dashboard API endpoint
-router.get('/api/dashboard', async (req: Request, res: Response) => {
+// Dashboard API endpoint (mounted at /api/dashboard)
+router.get('/', async (req: Request, res: Response) => {
   try {
     const { timeRange = 'today', field = 'general' } = req.query;
 
@@ -52,7 +52,7 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
       WHERE c."lastMessageTime" >= $1
     `;
 
-    const realTimeResult = await pool.query(realTimeQuery, [startDate.toISOString()]);
+    const realTimeResult = await pool.query(realTimeQuery, [startDate]);
 
     // Query messages for incoming/outgoing
     const messagesQuery = `
@@ -63,7 +63,7 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
       WHERE "timeStamp" >= $1
     `;
 
-    const messagesResult = await pool.query(messagesQuery, [startDate.toISOString()]);
+    const messagesResult = await pool.query(messagesQuery, [startDate]);
 
     // Query distinct contacts
     const contactsQuery = `
@@ -72,16 +72,77 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
       WHERE "lastMessageTime" >= $1
     `;
 
-    const contactsResult = await pool.query(contactsQuery, [startDate.toISOString()]);
+    const contactsResult = await pool.query(contactsQuery, [startDate]);
 
-    // Query distinct users
+    // Query app users summary (real users + active logged-in users)
     const usersQuery = `
-      SELECT COUNT(DISTINCT "userId") as users
-      FROM chats
-      WHERE "lastMessageTime" >= $1
+      SELECT
+        COUNT(*)::int as total_users,
+        COUNT(*) FILTER (WHERE COALESCE(is_active, false) = true)::int as active_users
+      FROM app_users
     `;
 
-    const usersResult = await pool.query(usersQuery, [startDate.toISOString()]);
+    const usersResult = await pool.query(usersQuery);
+
+    // Query agent performance from app_users + assigned chats
+    const agentMetricsQuery = `
+      WITH latest_status AS (
+        SELECT DISTINCT ON (chat_id) chat_id, status
+        FROM chat_status_details
+        ORDER BY chat_id, changed_at DESC
+      ),
+      first_incoming AS (
+        SELECT "chatId", MIN("timeStamp") as first_incoming
+        FROM messages
+        WHERE "isFromMe" = false AND "timeStamp" >= $1
+        GROUP BY "chatId"
+      ),
+      first_outgoing AS (
+        SELECT "chatId", MIN("timeStamp") as first_outgoing
+        FROM messages
+        WHERE "isFromMe" = true AND "timeStamp" >= $1
+        GROUP BY "chatId"
+      )
+      SELECT
+        u.id as "agentId",
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''), u.username) as "agentName",
+        COALESCE(COUNT(DISTINCT c.id), 0)::int as "totalAssignedChats",
+        COALESCE(COUNT(DISTINCT CASE WHEN ls.status = 'resolved' THEN c.id END), 0)::int as "resolvedChats",
+        COALESCE(COUNT(DISTINCT CASE WHEN ls.status = 'open' THEN c.id END), 0)::int as "openChats",
+        COALESCE(ROUND(AVG(
+          CASE
+            WHEN fi.first_incoming IS NOT NULL
+             AND fo.first_outgoing IS NOT NULL
+             AND fo.first_outgoing >= fi.first_incoming
+            THEN EXTRACT(EPOCH FROM (fo.first_outgoing - fi.first_incoming))
+          END
+        ))::int, 0) as "responseTime",
+        COALESCE(ROUND(AVG(
+          CASE
+            WHEN c."lastMessageTime" IS NOT NULL
+            THEN EXTRACT(EPOCH FROM (NOW() - c."lastMessageTime"))
+          END
+        ))::int, 0) as "resolutionTime",
+        COALESCE(ROUND((
+          COUNT(DISTINCT CASE WHEN ls.status = 'resolved' THEN c.id END)::numeric
+          / NULLIF(COUNT(DISTINCT c.id), 0)
+        ) * 100)::int, 0) as "customerSatisfaction",
+        COALESCE(u.is_active, false) as "isActive"
+      FROM app_users u
+      LEFT JOIN chats c
+        ON c."assignedTo" = u.id::text
+       AND c."lastMessageTime" >= $1
+      LEFT JOIN latest_status ls ON ls.chat_id = c.id
+      LEFT JOIN first_incoming fi ON fi."chatId" = c.id
+      LEFT JOIN first_outgoing fo ON fo."chatId" = c.id
+      GROUP BY u.id, u.username, u.first_name, u.last_name, u.is_active
+      ORDER BY "totalAssignedChats" DESC, "agentName" ASC
+    `;
+
+    const agentMetricsResult = await pool.query(agentMetricsQuery, [startDate]);
+
+    const activeUsers = parseInt(usersResult.rows[0]?.active_users || '0');
+    const totalUsers = parseInt(usersResult.rows[0]?.total_users || '0');
 
     const dashboardData = {
       // Real-time metrics
@@ -96,7 +157,9 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
 
       // All-time metrics
       allInstances: parseInt(realTimeResult.rows[0]?.allChats || '0'),
-      allUsers: parseInt(usersResult.rows[0]?.users || '0'),
+      allUsers: activeUsers,
+      activeUsers,
+      totalUsers,
       allContacts: parseInt(contactsResult.rows[0]?.contacts || '0'),
       allBots: 0,
       allSpeedMessages: parseInt(messagesResult.rows[0]?.outgoing || '0'),
@@ -124,6 +187,26 @@ router.get('/api/dashboard', async (req: Request, res: Response) => {
         sent: 0,
         pending: 0
       },
+
+      agentMetrics: agentMetricsResult.rows.map((row: Record<string, unknown>) => ({
+        agentId: String(row.agentId || ''),
+        agentName: String(row.agentName || 'Unknown'),
+        responseTime: parseInt(String(row.responseTime || '0')),
+        resolutionTime: parseInt(String(row.resolutionTime || '0')),
+        customerSatisfaction: parseInt(String(row.customerSatisfaction || '0')),
+        empathyScore: parseInt(String(row.customerSatisfaction || '0')),
+        professionalismScore: parseInt(String(row.customerSatisfaction || '0')),
+        problemSolvingScore: parseInt(String(row.customerSatisfaction || '0')),
+        complianceScore: parseInt(String(row.customerSatisfaction || '0')),
+        upsellScore: 0,
+        productivityScore: parseInt(String(row.totalAssignedChats || '0')),
+        totalAssignedChats: parseInt(String(row.totalAssignedChats || '0')),
+        resolvedChats: parseInt(String(row.resolvedChats || '0')),
+        openChats: parseInt(String(row.openChats || '0')),
+        isActive: Boolean(row.isActive),
+        fieldType: field,
+      })),
+      tatData: [],
 
       fieldType: field
     };

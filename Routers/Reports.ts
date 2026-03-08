@@ -1,11 +1,11 @@
 import { Router, Request, Response } from 'express';
 import pool from '../DBConnection';
-import { adjustToConfiguredTimezone } from '../utils/timezone';
+import { adjustToConfiguredTimezone } from '../src/utils/timezone';
 
 const router = Router();
 
-// Get reports data
-router.get('/api/reports', async (req: Request, res: Response) => {
+// Get reports data (mounted at /api/reports)
+router.get('/', async (req: Request, res: Response) => {
   try {
     const { dateRange = '7days' } = req.query;
 
@@ -42,7 +42,7 @@ COUNT(*) as totalMessages,
   COUNT(CASE WHEN "isFromMe" = false THEN 1 END) as receivedMessages
       FROM messages
       WHERE "timeStamp" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
 
     // Query chats with current status from status details
     const chatsResult = await pool.query(`
@@ -65,7 +65,7 @@ COUNT(DISTINCT c.id) as totalChats,
         ORDER BY chat_id, changed_at DESC
   ) csd ON c.id = csd.chat_id
       WHERE c."lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
 
     // Query messages for response time calculation (simplified)
     const responseTimeResult = await pool.query(`
@@ -74,14 +74,14 @@ AVG(EXTRACT(EPOCH FROM("timeStamp" - "lastMessageTime")) / 60) as avgResponseTim
       FROM messages m
       JOIN chats c ON m."chatId" = c.id
       WHERE m."timeStamp" >= $1 AND m."isFromMe" = false
-  `, [startDate.toISOString()]);
+  `, [startDate]);
 
     // Query active agents (users who have sent messages)
     const agentsResult = await pool.query(`
       SELECT COUNT(DISTINCT "userId") as activeAgents
       FROM chats
       WHERE "lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
 
     // Calculate average resolution time using status details table
     const resolutionTimeResult = await pool.query(`
@@ -103,7 +103,7 @@ AVG(EXTRACT(EPOCH FROM(csd_closed.changed_at - csd_open.changed_at)) / 60) as av
           WHERE chat_id = c.id AND status = 'closed'
         )
       WHERE c."lastMessageTime" >= $1
-  `, [startDate.toISOString()]);
+  `, [startDate]);
 
     // Mock customer satisfaction (this would need a ratings table)
     const customerSatisfaction = 4.5;

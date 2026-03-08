@@ -2,13 +2,16 @@ import { Router, Request, Response } from 'express';
 import multer, { FileFilterCallback } from 'multer';
 import path from 'path';
 import fs from 'fs';
-import messageSenderRouter from './MessageSender';
+import { messageSenderService } from '../src/services/MessageSenderService';
+import { verifyToken } from '../src/utils/auth';
 
-import { emitChatUpdate, emitReactionUpdate } from '../SocketEmits';
-import { adjustToConfiguredTimezone } from '../utils/timezone';
+import { socketHandler } from '../src/handlers/SocketHandler';
+import { adjustToConfiguredTimezone } from '../src/utils/timezone';
 import prisma from '../prismaClient';
 
 const router = Router();
+
+const nowTimestamp = (): Date => adjustToConfiguredTimezone(new Date());
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -59,7 +62,27 @@ const upload = multer({
 
 router.get('/api/GetContacts', async (req: Request, res: Response) => {
   try {
-    const contacts = await prisma.cleaned_contacts.findMany();
+    const contacts = await prisma.$queryRawUnsafe(`
+      SELECT
+        lm.phone,
+        lm.lid,
+        lm.full_name AS "fullName",
+        lm.first_name AS "firstName",
+        lm.push_name AS "pushName",
+        lm.business_name AS "businessName",
+        COALESCE(NULLIF(lm.full_name, ''), NULLIF(lm.first_name, ''), NULLIF(lm.push_name, ''), lm.phone) AS name,
+        CASE
+          WHEN COALESCE(NULLIF(lm.full_name, ''), NULLIF(lm.first_name, '')) IS NOT NULL THEN true
+          ELSE false
+        END AS "isMyContact",
+        CASE
+          WHEN COALESCE(NULLIF(lm.full_name, ''), NULLIF(lm.first_name, '')) IS NULL
+               AND NULLIF(lm.push_name, '') IS NOT NULL THEN true
+          ELSE false
+        END AS "isLead"
+      FROM lid_mappings lm
+      ORDER BY lm.updated_at DESC NULLS LAST, lm.phone ASC
+    `);
     res.json(contacts);
   } catch (error) {
     console.error('Error fetching contacts:', error);
@@ -78,7 +101,8 @@ router.get('/api/GetCleanedContacts', async (req: Request, res: Response) => {
 });
 router.get('/api/GetChats', async (req: Request, res: Response) => {
   try {
-    const chats = await prisma.$queryRawUnsafe('SELECT ci.*, c."closeReason" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id ORDER BY ci."lastMessageTime" DESC');
+    const limit = Math.max(parseInt((req.query.limit as string) || '200', 10), 1);
+    const chats = await prisma.$queryRawUnsafe('SELECT ci.*, c."closeReason" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id ORDER BY ci."lastMessageTime" DESC LIMIT $1', limit);
     res.json(chats);
   } catch (error) {
     console.error('Error fetching chats:', error);
@@ -90,7 +114,7 @@ router.get('/api/GetChats', async (req: Request, res: Response) => {
 router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
   try {
     const page = Math.max(parseInt((req.query.page as string) || '1', 10), 1);
-    const limit = Math.max(parseInt((req.query.limit as string) || '25', 10), 1);
+    const limit = Math.max(parseInt((req.query.limit as string) || '200', 10), 1);
     const offset = (page - 1) * limit;
     const status = (req.query.status as string) || null;
 
@@ -129,11 +153,328 @@ async function callWuz(path: string, method = 'GET', body?: any) {
   return { ok: resp.ok, status: resp.status, data };
 }
 
+type CurrentAppIdentity = {
+  userId: string;
+  username: string;
+} | null;
+
+let mappingTableEnsured = false;
+
+async function ensureAppUserWuzMappingTable(): Promise<void> {
+  if (mappingTableEnsured) return;
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS app_user_wuz_mapping (
+      app_user_id uuid PRIMARY KEY,
+      wuz_user_id varchar(255) NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  mappingTableEnsured = true;
+}
+
+function extractAuthTokenFromRequest(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+      const bearer = String(parts[1] || '').trim();
+      if (bearer) return bearer;
+    }
+  }
+
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+
+  const cookies = cookieHeader.split(';').map((c) => c.trim());
+  const authCookie = cookies.find((c) => c.startsWith('auth_token='));
+  if (!authCookie) return null;
+
+  return decodeURIComponent(authCookie.substring('auth_token='.length));
+}
+
+function getCurrentAppIdentity(req: Request): CurrentAppIdentity {
+  try {
+    const authToken = extractAuthTokenFromRequest(req);
+    if (!authToken) return null;
+
+    const decoded = verifyToken(authToken);
+    const userId = String(decoded?.userId || '').trim();
+    const username = String(decoded?.username || '').trim();
+    if (!userId || !username) return null;
+
+    return { userId, username };
+  } catch {
+    return null;
+  }
+}
+
+async function getMappedWuzUserId(appUserId: string): Promise<string | null> {
+  await ensureAppUserWuzMappingTable();
+  const result = await prisma.$queryRawUnsafe<Array<{ wuz_user_id: string }>>(
+    'SELECT wuz_user_id FROM app_user_wuz_mapping WHERE app_user_id = $1::uuid LIMIT 1',
+    appUserId
+  );
+  return result?.[0]?.wuz_user_id || null;
+}
+
+async function resolveWuzTokenForCurrentUser(req: Request): Promise<string | null> {
+  try {
+    const identity = getCurrentAppIdentity(req);
+    if (!identity) return process.env.WUZAPI_Token || null;
+
+    // 1) Explicit mapping (source of truth)
+    const mappedWuzUserId = await getMappedWuzUserId(identity.userId);
+    if (mappedWuzUserId) {
+      const mapped = await prisma.users.findFirst({
+        where: { id: mappedWuzUserId },
+        select: { token: true },
+      });
+      if (mapped?.token) return mapped.token;
+    }
+
+    // 2) Heuristics for backward compatibility
+    const byName = await prisma.users.findFirst({
+      where: { name: identity.username },
+      select: { token: true },
+    });
+    if (byName?.token) return byName.token;
+
+    const byId = await prisma.users.findFirst({
+      where: { id: identity.userId },
+      select: { token: true },
+    });
+    if (byId?.token) return byId.token;
+
+    return process.env.WUZAPI_Token || null;
+  } catch {
+    return process.env.WUZAPI_Token || null;
+  }
+}
+
+async function callWuzForCurrentUser(req: Request, path: string, method = 'GET', body?: any) {
+  const userToken = await resolveWuzTokenForCurrentUser(req);
+  if (!userToken) {
+    return { ok: false, status: 401, data: { error: 'No user Wuz token configured' } };
+  }
+
+  const base = (process.env.WUZAPI || '').replace(/\/$/, '');
+  if (!base) throw new Error('WUZAPI env not configured');
+  const url = `${base}/${path.replace(/^\//, '')}`;
+
+  const headers: any = { 'Content-Type': 'application/json', token: userToken };
+  const resp = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await resp.json().catch(() => null);
+  return { ok: resp.ok, status: resp.status, data };
+}
+
+router.get('/api/settings/wuz-users', async (req: Request, res: Response) => {
+  try {
+    const identity = getCurrentAppIdentity(req);
+    if (!identity) return res.status(401).json({ error: 'Unauthorized' });
+
+    await ensureAppUserWuzMappingTable();
+    const mappedWuzUserId = await getMappedWuzUserId(identity.userId);
+    const users = await prisma.users.findMany({
+      select: {
+        id: true,
+        name: true,
+        jid: true,
+        connected: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({
+      mappedWuzUserId,
+      users,
+    });
+  } catch (error) {
+    console.error('Error fetching wuz users:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/wuz-mapping', async (req: Request, res: Response) => {
+  try {
+    const identity = getCurrentAppIdentity(req);
+    if (!identity) return res.status(401).json({ error: 'Unauthorized' });
+
+    const wuzUserId = String(req.body?.wuzUserId || '').trim();
+    if (!wuzUserId) return res.status(400).json({ error: 'wuzUserId is required' });
+
+    const exists = await prisma.users.findFirst({ where: { id: wuzUserId }, select: { id: true } });
+    if (!exists) return res.status(404).json({ error: 'Wuz user not found' });
+
+    await ensureAppUserWuzMappingTable();
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO app_user_wuz_mapping (app_user_id, wuz_user_id, updated_at)
+      VALUES ($1::uuid, $2, NOW())
+      ON CONFLICT (app_user_id)
+      DO UPDATE SET wuz_user_id = EXCLUDED.wuz_user_id, updated_at = NOW()
+      `,
+      identity.userId,
+      wuzUserId
+    );
+
+    res.json({ success: true, appUserId: identity.userId, wuzUserId });
+  } catch (error) {
+    console.error('Error saving wuz mapping:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.delete('/api/settings/wuz-mapping', async (req: Request, res: Response) => {
+  try {
+    const identity = getCurrentAppIdentity(req);
+    if (!identity) return res.status(401).json({ error: 'Unauthorized' });
+
+    await ensureAppUserWuzMappingTable();
+    await prisma.$executeRawUnsafe(
+      'DELETE FROM app_user_wuz_mapping WHERE app_user_id = $1::uuid',
+      identity.userId
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting wuz mapping:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// Settings: Session lifecycle + webhook + HMAC config proxies
+router.get('/api/settings/session/status', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/status');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error fetching session status:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/session/connect', async (req: Request, res: Response) => {
+  try {
+    const payload = {
+      Subscribe: Array.isArray(req.body?.Subscribe) ? req.body.Subscribe : ['Message', 'ReadReceipt', 'HistorySync', 'ChatPresence'],
+      Immediate: typeof req.body?.Immediate === 'boolean' ? req.body.Immediate : true,
+    };
+    const result = await callWuzForCurrentUser(req, 'session/connect', 'POST', payload);
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error connecting session:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/session/disconnect', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/disconnect', 'POST');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error disconnecting session:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/session/logout', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/logout', 'POST');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error logging out session:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.get('/api/settings/session/qr', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/qr');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error getting QR:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.get('/api/settings/webhook', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'webhook');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error getting webhook config:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/webhook', async (req: Request, res: Response) => {
+  try {
+    const payload = {
+      webhookURL: String(req.body?.webhookURL || ''),
+      events: Array.isArray(req.body?.events) ? req.body.events.join(',') : req.body?.events,
+      subscribe: Array.isArray(req.body?.subscribe) ? req.body.subscribe : undefined,
+    };
+    const result = await callWuzForCurrentUser(req, 'webhook', 'POST', payload);
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error setting webhook config:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.get('/api/settings/hmac', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/hmac/config');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error getting hmac config:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.post('/api/settings/hmac', async (req: Request, res: Response) => {
+  try {
+    const payload = { hmac_key: String(req.body?.hmac_key || '') };
+    const result = await callWuzForCurrentUser(req, 'session/hmac/config', 'POST', payload);
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error setting hmac config:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+router.delete('/api/settings/hmac', async (_req: Request, res: Response) => {
+  try {
+    const result = await callWuzForCurrentUser(_req, 'session/hmac/config', 'DELETE');
+    if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error deleting hmac config:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // Expose Wuz profile and presence endpoints
 router.get('/api/GetWuzProfile/:phone', async (req: Request, res: Response) => {
   try {
     const { phone } = req.params;
-    const result = await callWuz(`contact/profile?phone=${encodeURIComponent(phone)}`);
+    const result = await callWuz(`user/avater?phone=${encodeURIComponent(phone)}`);
     if (!result.ok) return res.status(502).json({ error: 'Wuz API error', details: result });
     res.json(result.data);
   } catch (error) {
@@ -231,14 +572,25 @@ router.get('/api/GetMessages/:id', async (req, res) => {
   const { id } = req.params; // ✅ Get route parameter
   const limit = Math.max(parseInt((req.query.limit as string) || '10', 10), 1);
   const before = (req.query.before as string) || null;
+  const beforeId = (req.query.beforeId as string) || null;
 
   try {
     let messages: any[];
     if (id) {
       if (before) {
+        const beforeDate = new Date(before);
+        if (Number.isNaN(beforeDate.getTime())) {
+          return res.status(400).json({ error: 'Invalid before cursor' });
+        }
+
         // Get messages before the specified timestamp (for pagination) with pushName from chats
         messages = await prisma.$queryRawUnsafe(
           `SELECT m.*, c.pushname as "pushName",
+          COALESCE(m."status", CASE WHEN m."isRead" = true THEN 'read' WHEN m."isDelivered" = true THEN 'delivered' ELSE 'sent' END) AS "status",
+          to_char(m."timeStamp" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "timeStamp",
+          COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") AS "contactName",
+          COALESCE(au.username, CASE WHEN m."isFromMe" = true THEN 'user' ELSE COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") END) AS "sender",
+          m."contactId" AS "contactPhone",
           CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
             json_build_object(
               'id', reply.id,
@@ -246,30 +598,48 @@ router.get('/api/GetMessages/:id', async (req, res) => {
               'isFromMe', reply."isFromMe",
               'pushName', reply."pushname",
               'contactId', reply."contactId",
-              'mediaPath', reply."mediaPath"
+              'mediaPath', reply."mediaPath",
+              'contactName', COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId"),
+              'sender', COALESCE(rau.username, CASE WHEN reply."isFromMe" = true THEN 'user' ELSE COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId") END)
             )
           ELSE NULL END as "replyToMessage",
           (
             SELECT json_agg(json_build_object(
               'emoji', mr.emoji,
               'participant', mr.participant,
-              'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
+              'contactName', COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, mr.participant)
             ))
             FROM message_reactions mr
-            LEFT JOIN cleaned_contacts cc ON mr.participant = cc.phone
+            LEFT JOIN lid_mappings lm ON mr.participant = lm.phone
             WHERE mr."messageId" = m.id
           ) as reactions
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
-                   WHERE m."chatId" = $1 AND m."timeStamp" < $2::timestamp 
-                   ORDER BY m."timeStamp" DESC LIMIT $3`,
-          id, new Date(before).toISOString(), limit
+                   LEFT JOIN lid_mappings lm ON lm.phone = m."contactId"
+                   LEFT JOIN lid_mappings lm2 ON lm2.phone = reply."contactId"
+                   LEFT OUTER JOIN app_users au ON au.id::text = m."userId"
+                   LEFT OUTER JOIN app_users rau ON rau.id::text = reply."userId"
+                   WHERE m."chatId" = $1
+                     AND (
+                       m."timeStamp" < $2::timestamptz
+                       OR (m."timeStamp" = $2::timestamptz AND ($3::text IS NULL OR m.id < $3))
+                     )
+                   ORDER BY m."timeStamp" DESC, m.id DESC LIMIT $4`,
+          id,
+          beforeDate.toISOString(),
+          beforeId,
+          limit
         );
       } else {
         // Get last N messages (initial load) with pushName from chats
         messages = await prisma.$queryRawUnsafe(
           `SELECT m.*, c.pushname as "pushName",
+          COALESCE(m."status", CASE WHEN m."isRead" = true THEN 'read' WHEN m."isDelivered" = true THEN 'delivered' ELSE 'sent' END) AS "status",
+          to_char(m."timeStamp" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "timeStamp",
+          COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") AS "contactName",
+          COALESCE(au.username, CASE WHEN m."isFromMe" = true THEN 'user' ELSE COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") END) AS "sender",
+          m."contactId" AS "contactPhone",
           CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
             json_build_object(
               'id', reply.id,
@@ -277,30 +647,41 @@ router.get('/api/GetMessages/:id', async (req, res) => {
               'isFromMe', reply."isFromMe",
               'pushName', reply."pushname",
               'contactId', reply."contactId",
-              'mediaPath', reply."mediaPath"
+              'mediaPath', reply."mediaPath",
+              'contactName', COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId"),
+              'sender', COALESCE(rau.username, CASE WHEN reply."isFromMe" = true THEN 'user' ELSE COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId") END)
             )
           ELSE NULL END as "replyToMessage",
           (
             SELECT json_agg(json_build_object(
               'emoji', mr.emoji,
               'participant', mr.participant,
-              'contactName', COALESCE(cc.first_name, cc.full_name, cc.push_name, cc.business_name, mr.participant)
+              'contactName', COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, mr.participant)
             ))
             FROM message_reactions mr
-            LEFT JOIN cleaned_contacts cc ON mr.participant = cc.phone
+            LEFT JOIN lid_mappings lm ON mr.participant = lm.phone
             WHERE mr."messageId" = m.id
           ) as reactions
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id 
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
+                   LEFT JOIN lid_mappings lm ON lm.phone = m."contactId"
+                   LEFT JOIN lid_mappings lm2 ON lm2.phone = reply."contactId"
+                   LEFT OUTER JOIN app_users au ON au.id::text = m."userId"
+                   LEFT OUTER JOIN app_users rau ON rau.id::text = reply."userId"
                    WHERE m."chatId" = $1 
-                   ORDER BY m."timeStamp" DESC LIMIT $2`,
+                   ORDER BY m."timeStamp" DESC, m.id DESC LIMIT $2`,
           id, limit
         );
       }
     } else {
       messages = await prisma.$queryRawUnsafe(`
               SELECT m.*, c.pushname as "pushName",
+              COALESCE(m."status", CASE WHEN m."isRead" = true THEN 'read' WHEN m."isDelivered" = true THEN 'delivered' ELSE 'sent' END) AS "status",
+              to_char(m."timeStamp" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "timeStamp",
+              COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") AS "contactName",
+              COALESCE(au.username, CASE WHEN m."isFromMe" = true THEN 'user' ELSE COALESCE(lm.full_name, lm.first_name, lm.business_name, lm.push_name, m."contactId") END) AS "sender",
+              m."contactId" AS "contactPhone",
               CASE WHEN m."replyToMessageId" IS NOT NULL THEN 
                 json_build_object(
                   'id', reply.id,
@@ -308,17 +689,23 @@ router.get('/api/GetMessages/:id', async (req, res) => {
                   'isFromMe', reply."isFromMe",
                   'pushName', reply."pushname",
                   'contactId', reply."contactId",
-                  'mediaPath', reply."mediaPath"
+                  'mediaPath', reply."mediaPath",
+                  'contactName', COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId"),
+                  'sender', COALESCE(rau.username, CASE WHEN reply."isFromMe" = true THEN 'user' ELSE COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId") END)
                 )
               ELSE NULL END as "replyToMessage"
               FROM messages m 
               LEFT JOIN chats c ON m."chatId" = c.id
               LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
-              ORDER BY m."timeStamp" DESC
+              LEFT JOIN lid_mappings lm ON lm.phone = m."contactId"
+              LEFT JOIN lid_mappings lm2 ON lm2.phone = reply."contactId"
+              LEFT OUTER JOIN app_users au ON au.id::text = m."userId"
+              LEFT OUTER JOIN app_users rau ON rau.id::text = reply."userId"
+                ORDER BY m."timeStamp" DESC, m.id DESC
           `);
     }
 
-    res.json({ messages: messages }); // Return newest first as expected by frontend
+    res.json({ messages: messages }); // Keep DB order: newest first (DESC)
   } catch (error) {
     console.error('Error fetching messages:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -328,19 +715,20 @@ router.get('/api/GetMessages/:id', async (req, res) => {
 // Media sending routes
 router.post('/api/sendImage', upload.single('image'), async (req: any, res: Response) => {
   try {
-    const messageSender = await messageSenderRouter();
+    // const messageSender = await messageSenderRouter(); // Removed
     const { phone, message, replyToId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
 
+    const isoTimestamp = nowTimestamp();
     const chatMessage = {
       id: Date.now().toString(),
       chatId: phone,
       message: message || '',
-      timestamp: new Date(),
-      timeStamp: new Date(),
+      timestamp: isoTimestamp,
+      timeStamp: isoTimestamp,
       ContactId: 'current_user',
       messageType: 'image',
       isEdit: false,
@@ -351,7 +739,7 @@ router.post('/api/sendImage', upload.single('image'), async (req: any, res: Resp
       replyToMessageId: replyToId
     };
 
-    const result = await messageSender.sendImage(chatMessage, req.file);
+    const result = await messageSenderService.sendImage(chatMessage, req.file);
     res.json(result);
   } catch (error) {
     console.error('Error sending image:', error);
@@ -361,19 +749,20 @@ router.post('/api/sendImage', upload.single('image'), async (req: any, res: Resp
 
 router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Response) => {
   try {
-    const messageSender = await messageSenderRouter();
+    // const messageSender = await messageSenderRouter(); // Removed
     const { phone, message, replyToId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
     }
 
+    const isoTimestamp = nowTimestamp();
     const chatMessage = {
       id: Date.now().toString(),
       chatId: phone,
       message: message || '',
-      timestamp: new Date(),
-      timeStamp: new Date(),
+      timestamp: isoTimestamp,
+      timeStamp: isoTimestamp,
       ContactId: 'current_user',
       messageType: 'video',
       isEdit: false,
@@ -384,7 +773,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
       replyToMessageId: replyToId
     };
 
-    const result = await messageSender.sendVideo(chatMessage, req.file);
+    const result = await messageSenderService.sendVideo(chatMessage, req.file);
     res.json(result);
   } catch (error) {
     console.error('Error sending video:', error);
@@ -394,7 +783,7 @@ router.post('/api/sendVideo', upload.single('video'), async (req: any, res: Resp
 
 router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Response) => {
   try {
-    const messageSender = await messageSenderRouter();
+    // const messageSender = await messageSenderRouter(); // Removed
     const { phone, audioData, mimeType = 'audio/ogg', seconds, waveform, id, replyToId } = req.body;
 
     // Handle both file upload and base64 data
@@ -435,12 +824,13 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
       return res.status(400).json({ error: 'No audio file or audioData provided' });
     }
 
+    const isoTimestamp = nowTimestamp();
     const chatMessage = {
       id: id || Date.now().toString(),
       chatId: phone,
       message: '',
-      timestamp: new Date(),
-      timeStamp: new Date(),
+      timestamp: isoTimestamp,
+      timeStamp: isoTimestamp,
       ContactId: 'current_user',
       messageType: 'audio',
       isEdit: false,
@@ -453,7 +843,7 @@ router.post('/api/sendAudio', upload.single('audio'), async (req: any, res: Resp
       replyToMessageId: replyToId
     };
 
-    const result = await messageSender.sendAudio(chatMessage, audioFile);
+    const result = await messageSenderService.sendAudio(chatMessage, audioFile);
 
     // Clean up temporary file if created from base64
     if (audioData && audioFile.path) {
@@ -571,7 +961,7 @@ router.post('/api/AssignTagToChat', async (req: Request, res: Response) => {
         tagId: BigInt(tagId),
         chatId: chatId,
         createdBy: createdBy,
-        creationDate: adjustToConfiguredTimezone(new Date())
+        creationDate: nowTimestamp()
       }
     });
 
@@ -660,7 +1050,7 @@ router.post('/api/ForwardMessage', async (req: Request, res: Response) => {
       id: Date.now().toString(),
       chatId: targetChatId,
       message: originalMessage.message,
-      timestamp: adjustToConfiguredTimezone(new Date()),
+      timestamp: nowTimestamp(),
       ContactId: originalMessage.senderId,
       messageType: originalMessage.messageType || 'text',
       isEdit: false,
@@ -671,25 +1061,25 @@ router.post('/api/ForwardMessage', async (req: Request, res: Response) => {
     };
 
     // Use the centralized MessageSender to actually send the forwarded message
-    const messageSender = await messageSenderRouter();
+    // const messageSender = await messageSenderRouter();
 
     let sendResult: any = { success: false, error: 'Unsupported message type' };
 
     if ((forwardedMessage.messageType || 'text') === 'text') {
-      sendResult = await messageSender.sendMessage(forwardedMessage);
+      sendResult = await messageSenderService.sendMessage(forwardedMessage);
     } else if (forwardedMessage.messageType === 'image' && originalMessage.filePath) {
       // If original message had a file, try to use it
-      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'image.jpg' };
-      sendResult = await messageSender.sendImage(forwardedMessage, mockFile);
+      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'image.jpg', mimetype: 'image/jpeg' };
+      sendResult = await messageSenderService.sendImage(forwardedMessage, mockFile);
     } else if (forwardedMessage.messageType === 'video' && originalMessage.filePath) {
-      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'video.mp4' };
-      sendResult = await messageSender.sendVideo(forwardedMessage, mockFile);
+      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'video.mp4', mimetype: 'video/mp4' };
+      sendResult = await messageSenderService.sendVideo(forwardedMessage, mockFile);
     } else if (forwardedMessage.messageType === 'audio' && originalMessage.filePath) {
-      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'audio.webm' };
-      sendResult = await messageSender.sendAudio(forwardedMessage, mockFile);
+      const mockFile = { path: originalMessage.filePath, filename: originalMessage.fileName || 'audio.webm', mimetype: 'audio/ogg' };
+      sendResult = await messageSenderService.sendAudio(forwardedMessage, mockFile);
     } else {
       // Fallback to sending text
-      sendResult = await messageSender.sendMessage(forwardedMessage);
+      sendResult = await messageSenderService.sendMessage(forwardedMessage);
     }
 
     if (!sendResult || !sendResult.success) {
@@ -775,7 +1165,7 @@ router.post('/api/AssignChat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'chatId, assignedTo, and assignedBy are required' });
     }
 
-    const assignedAt = adjustToConfiguredTimezone(new Date());
+    const assignedAt = nowTimestamp();
 
     // Assign the chat
     await prisma.chatAssignmentDetail.upsert({
@@ -964,7 +1354,7 @@ router.put('/api/UpdateMessageTemplate/:id', async (req: Request, res: Response)
       data: {
         name,
         content,
-        updatedat: new Date()
+        updatedat: nowTimestamp()
       }
     });
 
@@ -1029,7 +1419,7 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
         pushname: displayName,
         contactId: cleanPhone,
         lastMessage: '',
-        lastMessageTime: new Date(),
+        lastMessageTime: nowTimestamp(),
         unReadCount: 0,
         isOnline: false,
         isarchived: false,
@@ -1041,7 +1431,7 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
 
     // Try to fetch avatar/profile from Wuz API and store in Contacts.Image if available
     try {
-      const profile = await callWuz(`contact/profile?phone=${encodeURIComponent(cleanPhone)}`);
+      const profile = await callWuz(`user/avatar?phone=${encodeURIComponent(cleanPhone)}`);
       if (profile && profile.ok && profile.data) {
         const avatarUrl = profile.data.avatar || profile.data.image || profile.data.profilePic;
         if (avatarUrl) {
@@ -1073,7 +1463,7 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
           zip: '',
           country: '',
           lastMessage: '',
-          lastMessageTime: new Date(),
+          lastMessageTime: nowTimestamp(),
           unReadCount: 0,
           isTyping: false,
           isOnline: false,
@@ -1171,7 +1561,7 @@ router.post('/api/ReplyToMessage', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'originalMessageId, replyMessage, userId, and chatId are required' });
     }
 
-    const timestamp = new Date();
+    const timestamp = nowTimestamp();
 
     // Insert reply message into database
     const newReply = await prisma.messages.create({
@@ -1230,24 +1620,25 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
       }
     });
 
-    const messageSender = await messageSenderRouter();
+    // const messageSender = await messageSenderRouter();
 
     // Get message info to check if it's our own message
     const message = await prisma.messages.findUnique({
       where: { id: messageId },
-      select: { chatId: true, isFromMe: true }
+      select: { chatId: true, contactId: true, isFromMe: true }
     });
 
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
-    const { chatId, isFromMe } = message;
-    const targetId = phone || chatId || '';
+    const { chatId, contactId, isFromMe } = message;
+    // Reactions should target the contact/phone JID, not the local chat id.
+    const targetId = phone || contactId || chatId || '';
 
     if (existingReaction) {
       // Remove existing reaction
       // Send removal to WhatsApp (empty string)
-      await messageSender.sendReaction(targetId, messageId, "", !!isFromMe);
+      await messageSenderService.sendReaction(targetId, messageId, "");
 
       await prisma.message_reactions.delete({
         where: { id: existingReaction.id }
@@ -1257,13 +1648,13 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
       const updatedReactions = await prisma.message_reactions.findMany({
         where: { messageId }
       });
-      emitReactionUpdate(chatId || '', messageId, updatedReactions);
+      socketHandler.getIO()?.emit('reaction_updated', { chatId: chatId || '', messageId, reactions: updatedReactions });
 
       res.json({ success: true, message: 'Reaction removed', action: 'removed' });
     } else {
       // Add new reaction
       // Send reaction to WhatsApp
-      await messageSender.sendReaction(targetId, messageId, emoji, !!isFromMe);
+      await messageSenderService.sendReaction(targetId, messageId, emoji);
 
       const reactionId = Date.now().toString();
       const newReaction = await prisma.message_reactions.create({
@@ -1272,7 +1663,7 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
           messageId: messageId,
           userId: userId,
           emoji: emoji,
-          createdAt: new Date()
+          createdAt: nowTimestamp()
         }
       });
 
@@ -1280,7 +1671,7 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
       const updatedReactions = await prisma.message_reactions.findMany({
         where: { messageId }
       });
-      emitReactionUpdate(chatId || '', messageId, updatedReactions);
+      socketHandler.getIO()?.emit('reaction_updated', { chatId: chatId || '', messageId, reactions: updatedReactions });
 
       res.status(201).json({
         success: true,
@@ -1403,7 +1794,7 @@ router.put('/api/MarkChatAsRead/:chatId', async (req: Request, res: Response) =>
 
     // Emit socket event to update all clients
     if (updatedChat) {
-      emitChatUpdate(updatedChat);
+      socketHandler.getIO()?.emit('chat_update', updatedChat);
     }
 
     res.json({ success: true, message: 'Chat marked as read', chat: updatedChat });

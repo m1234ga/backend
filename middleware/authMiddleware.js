@@ -4,16 +4,31 @@ exports.adminMiddleware = exports.authMiddleware = void 0;
 const auth_1 = require("../src/utils/auth");
 const authMiddleware = (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader) {
+    let token = null;
+    if (authHeader) {
+        const parts = authHeader.split(' ');
+        if (parts.length === 2) {
+            const [scheme, bearerToken] = parts;
+            if (/^Bearer$/i.test(scheme) && bearerToken && bearerToken.trim().length > 0) {
+                token = bearerToken.trim();
+            }
+        }
+    }
+    if (!token) {
+        const cookieHeader = req.headers.cookie;
+        if (cookieHeader) {
+            const cookies = cookieHeader.split(';').map((c) => c.trim());
+            const authCookie = cookies.find((cookie) => cookie.startsWith('auth_token='));
+            if (authCookie) {
+                const cookieToken = authCookie.substring('auth_token='.length);
+                if (cookieToken) {
+                    token = decodeURIComponent(cookieToken);
+                }
+            }
+        }
+    }
+    if (!token) {
         return res.status(401).json({ error: 'No token provided' });
-    }
-    const parts = authHeader.split(' ');
-    if (parts.length !== 2) {
-        return res.status(401).json({ error: 'Token error' });
-    }
-    const [scheme, token] = parts;
-    if (!/^Bearer$/i.test(scheme)) {
-        return res.status(401).json({ error: 'Token malformatted' });
     }
     try {
         const decoded = (0, auth_1.verifyToken)(token);

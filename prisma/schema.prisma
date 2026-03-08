@@ -95,6 +95,30 @@ model cleaned_contacts {
   chatId        String? @db.VarChar(50)
 }
 
+model lid_mappings {
+  lid           String    @id @db.VarChar(100)
+  phone         String    @db.VarChar(50)
+  full_name     String?   @db.VarChar(200)
+  first_name    String?   @db.VarChar(200)
+  business_name String?   @db.VarChar(200)
+  push_name     String?   @db.VarChar(200)
+  is_my_contact Boolean?  @default(false)
+  is_business   Boolean?  @default(false)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([phone], map: "idx_lid_mappings_phone")
+}
+
+model pending_lid_contacts {
+  lid           String    @id @db.VarChar(100)
+  chat_id       String?   @db.VarChar(50)
+  full_name     String?
+  first_name    String?
+  push_name     String?
+  business_name String?
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+}
+
 model contacts {
   id               String             @id @db.VarChar(50)
   name             String
@@ -178,6 +202,7 @@ model messages {
   timeStamp         DateTime?           @default(now()) @db.Timestamp(6)
   isDelivered       Boolean?            @default(false)
   isRead            Boolean?            @default(false)
+  status            String?             @default("sent") @db.VarChar(20)
   messageType       String?
   isFromMe          Boolean?
   contactId         String?             @db.VarChar(50)

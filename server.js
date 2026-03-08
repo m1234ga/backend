@@ -1,196 +1,224 @@
 "use strict";
+/**
+ * Production-Ready Server Entry Point
+ * Refactored with proper architecture, security, and error handling
+ */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-require("dotenv/config");
+exports.io = exports.server = exports.app = void 0;
 const express_1 = __importDefault(require("express"));
 const https_1 = __importDefault(require("https"));
 const http_1 = __importDefault(require("http"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const cors_1 = __importDefault(require("cors"));
+// Configuration and utilities
+const config_1 = require("./src/config");
+const logger_1 = require("./src/utils/logger");
+const timezone_1 = require("./src/utils/timezone");
+const rateLimiter_1 = require("./src/middleware/rateLimiter");
+const constants_1 = require("./src/constants");
+// Handlers
+const SocketHandler_1 = require("./src/handlers/SocketHandler");
+// Routers
 const Chat_1 = __importDefault(require("./Routers/Chat"));
 const UserManagement_1 = __importDefault(require("./Routers/UserManagement"));
 const Reports_1 = __importDefault(require("./Routers/Reports"));
 const Dashboard_1 = __importDefault(require("./Routers/Dashboard"));
-const processWhatsAppHooks_1 = __importDefault(require("./processWhatsAppHooks"));
-const SocketEmits_1 = require("./SocketEmits");
-const app = (0, express_1.default)();
-// Trigger restart
-// SSL Certificate configuration
-// Read certificate paths from environment variables
-const useHttps = process.env.USE_HTTPS !== 'false'; // Default to true unless explicitly disabled
-let server;
-if (useHttps) {
-    // Determine certificate paths from environment variables
-    let certPath;
-    let keyPath;
-    // Option 1: Full paths from environment variables
-    if (process.env.SSL_CERT_PATH && process.env.SSL_KEY_PATH) {
-        certPath = process.env.SSL_CERT_PATH;
-        keyPath = process.env.SSL_KEY_PATH;
-        console.log('📋 Using SSL certificate paths from environment variables:');
-        console.log(`   Certificate: ${certPath}`);
-        console.log(`   Private Key: ${keyPath}`);
-    }
-    // Option 2: Filenames with base path from environment variables
-    else if (process.env.SSL_CERT_FILENAME && process.env.SSL_KEY_FILENAME) {
-        const basePath = process.env.SSL_BASE_PATH || path_1.default.join(__dirname, 'ssl');
-        certPath = path_1.default.join(basePath, process.env.SSL_CERT_FILENAME);
-        keyPath = path_1.default.join(basePath, process.env.SSL_KEY_FILENAME);
-        console.log('📋 Using SSL certificate filenames from environment variables:');
-        console.log(`   Base Path: ${basePath}`);
-        console.log(`   Certificate: ${process.env.SSL_CERT_FILENAME}`);
-        console.log(`   Private Key: ${process.env.SSL_KEY_FILENAME}`);
-        console.log(`   Full Certificate Path: ${certPath}`);
-        console.log(`   Full Key Path: ${keyPath}`);
-    }
-    // Option 3: Default fallback (for backward compatibility)
-    else {
-        certPath = path_1.default.join(__dirname, 'ssl', 'cert.pem');
-        keyPath = path_1.default.join(__dirname, 'ssl', 'key.pem');
-        console.log('📋 Using default SSL certificate paths (no environment variables set):');
-        console.log(`   Certificate: ${certPath}`);
-        console.log(`   Private Key: ${keyPath}`);
-        console.log('💡 Tip: Set SSL_CERT_PATH and SSL_KEY_PATH (or SSL_CERT_FILENAME and SSL_KEY_FILENAME) in your .env file');
-    }
-    try {
-        // Check if certificate files exist
-        if (fs_1.default.existsSync(certPath) && fs_1.default.existsSync(keyPath)) {
-            const options = {
-                cert: fs_1.default.readFileSync(certPath),
-                key: fs_1.default.readFileSync(keyPath)
-            };
-            server = https_1.default.createServer(options, app);
-            console.log('✅ HTTPS server initialized with SSL certificates');
-        }
-        else {
-            console.warn(`⚠️  SSL certificates not found at:`);
-            console.warn(`   Certificate: ${certPath}`);
-            console.warn(`   Private Key: ${keyPath}`);
-            console.warn('⚠️  Falling back to HTTP. To use HTTPS, please provide SSL certificates.');
-            console.warn('⚠️  Set SSL_CERT_PATH and SSL_KEY_PATH in your .env file, or');
-            console.warn('⚠️  For development, generate self-signed certificates using:');
-            console.warn('⚠️  openssl req -x509 -newkey rsa:4096 -nodes -keyout ssl/key.pem -out ssl/cert.pem -days 365');
-            server = http_1.default.createServer(app);
-        }
-    }
-    catch (error) {
-        console.error('❌ Error loading SSL certificates:', error);
-        console.warn('⚠️  Falling back to HTTP server');
-        server = http_1.default.createServer(app);
-    }
-}
-else {
-    server = http_1.default.createServer(app);
-    console.log('ℹ️  HTTP server initialized (HTTPS disabled via USE_HTTPS=false)');
-}
-// Determine protocol based on server type
-const protocol = server instanceof https_1.default.Server ? 'https' : 'http';
-const defaultFrontendUrl = process.env.FRONTEND_URL || `${protocol}://localhost:3000`;
-// Build allowed origins list
-const allowedOrigins = [
-    defaultFrontendUrl,
-    defaultFrontendUrl.replace(/^https?/, 'http'), // Also allow HTTP version if HTTPS is used
-    defaultFrontendUrl.replace(/^https?/, 'https'), // Also allow HTTPS version if HTTP is used
-    // Add any additional origins from environment variable (comma-separated)
-    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [])
-];
 const Auth_1 = __importDefault(require("./Routers/Auth"));
-const authMiddleware_1 = require("./middleware/authMiddleware");
-// ... (other imports)
-// CORS middleware - must be before routes
-app.use((0, cors_1.default)({
+const processWhatsAppHooks_1 = __importDefault(require("./processWhatsAppHooks"));
+const logger = (0, logger_1.createLogger)('Server');
+// Validate configuration on startup
+try {
+    (0, config_1.validateConfig)();
+    logger.info('Configuration validated successfully');
+}
+catch (error) {
+    logger.error('Configuration validation failed', error);
+    process.exit(1);
+}
+const app = (0, express_1.default)();
+exports.app = app;
+// ============================================================================
+// MIDDLEWARE
+// ============================================================================
+// Body parsing
+app.use(express_1.default.json({ limit: '200mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '200mb' }));
+// CORS configuration
+const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, Postman, or curl)
-        if (!origin) {
-            return callback(null, true);
-        }
-        // Check if origin is in allowed list
-        if (allowedOrigins.includes(origin)) {
+        const allowedOrigins = [
+            config_1.CONFIG.FRONTEND_URL,
+            config_1.CONFIG.FRONTEND_URL.replace(/^https?/, 'http'),
+            config_1.CONFIG.FRONTEND_URL.replace(/^https?/, 'https'),
+            ...config_1.CONFIG.ALLOWED_ORIGINS,
+        ];
+        if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         }
         else {
-            // Log for debugging
-            console.warn(`⚠️  CORS blocked origin: ${origin}`);
+            logger.security('CORS blocked request', { origin });
             callback(new Error('Not allowed by CORS'));
         }
     },
-    credentials: true, // Enable credentials (cookies, authorization headers)
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
-    exposedHeaders: ['Set-Cookie'],
-    preflightContinue: false,
-    optionsSuccessStatus: 204
-}));
-// Additional CORS headers middleware to ensure all responses have CORS headers
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+};
+app.use((0, cors_1.default)(corsOptions));
+// Rate limiting
+app.use('/api', rateLimiter_1.httpRateLimiter.middleware);
+// Static file serving
+app.use('/imgs', express_1.default.static(config_1.CONFIG.PATHS.IMAGES));
+app.use('/video', express_1.default.static(config_1.CONFIG.PATHS.VIDEOS));
+app.use('/audio', express_1.default.static(config_1.CONFIG.PATHS.AUDIO));
+app.use('/docs', express_1.default.static(config_1.CONFIG.PATHS.DOCUMENTS));
+// Request logging
 app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-        res.header('Access-Control-Allow-Credentials', 'true');
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie, Set-Cookie');
-        res.header('Access-Control-Expose-Headers', 'Set-Cookie');
-    }
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(204).end();
-    }
+    const startTime = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - startTime;
+        logger.apiRequest(req.method, req.path, {
+            status: res.statusCode,
+            duration,
+            ip: req.ip,
+        });
+    });
     next();
 });
-// Configure session (removed as we use JWT)
-// app.use(sessionConfig);
-app.use('/imgs', express_1.default.static('imgs'));
-app.use('/audio', express_1.default.static('audio'));
-app.use('/video', express_1.default.static('video'));
-app.use('/docs', express_1.default.static('docs'));
-app.use(express_1.default.json({ limit: '200mb' }));
-app.use(express_1.default.urlencoded({ limit: '200mb', extended: true }));
-// Auth Routes
-app.use('/auth', Auth_1.default);
-// Temporary public debug endpoint
-if ((process.env.DEBUG_API_PUBLIC || 'false').toLowerCase() === 'true') {
-    app.get('/ChatPublic/api/GetChatsPage', async (req, res) => {
-        try {
-            const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-            const limit = Math.max(parseInt(req.query.limit || '25', 10), 1);
-            const offset = (page - 1) * limit;
-            const status = req.query.status || null;
-            let baseSql = 'SELECT * FROM chatsInfo';
-            const params = [];
-            if (status) {
-                baseSql += ' WHERE status = $1';
-                params.push(status);
-            }
-            baseSql += ' ORDER BY "lastMessageTime" DESC, id DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-            params.push(limit, offset);
-            const result = await global.pool.query(baseSql, params);
-            res.json({ page, limit, chats: result.rows });
-        }
-        catch (error) {
-            console.error('Error in public GetChatsPage:', error);
-            res.status(500).json({ error: 'Internal Server Error' });
-        }
+// ============================================================================
+// ROUTES
+// ============================================================================
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(constants_1.HTTP_STATUS.OK).json({
+        status: 'healthy',
+        timestamp: (0, timezone_1.adjustToConfiguredTimezone)(new Date()),
+        uptime: process.uptime(),
+        environment: config_1.CONFIG.NODE_ENV,
     });
-}
-// Protect API routes with JWT Middleware
-app.use('/Chat', authMiddleware_1.authMiddleware, Chat_1.default);
-app.use('/api/users', authMiddleware_1.adminMiddleware, UserManagement_1.default);
-app.use('', Reports_1.default); // Reports accessible without protection for now
-app.use('', Dashboard_1.default); // Dashboard accessible without protection for now
-app.post('/webhook', async (req, res) => {
-    var data = new processWhatsAppHooks_1.default(req.body);
-    console.log('✅ Webhook received:', req.body);
-    res.status(200).json({ message: 'Webhook received successfully' });
 });
+// API routes
+app.use('/api/auth', Auth_1.default);
+app.use('/api/chat', Chat_1.default);
+app.use('/api/user-management', UserManagement_1.default);
+app.use('/api/reports', Reports_1.default);
+app.use('/api/dashboard', Dashboard_1.default);
+// WhatsApp webhook
+app.post('/webhook', async (req, res) => {
+    try {
+        logger.debug('Received webhook', { type: req.body?.type });
+        await (0, processWhatsAppHooks_1.default)(req.body);
+        res.status(constants_1.HTTP_STATUS.OK).json({ success: true });
+    }
+    catch (error) {
+        logger.error('Webhook processing failed', error);
+        res.status(constants_1.HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+            success: false,
+            error: constants_1.ERROR_MESSAGES.INTERNAL_ERROR,
+        });
+    }
+});
+// 404 handler
+app.use((req, res) => {
+    logger.warn('Route not found', { path: req.path, method: req.method });
+    res.status(constants_1.HTTP_STATUS.NOT_FOUND).json({
+        error: constants_1.ERROR_MESSAGES.NOT_FOUND,
+        path: req.path,
+    });
+});
+// Global error handler
+app.use((err, req, res, next) => {
+    logger.error('Unhandled error', err, {
+        path: req.path,
+        method: req.method,
+        body: req.body,
+    });
+    res.status(constants_1.HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+        error: config_1.CONFIG.NODE_ENV === 'production'
+            ? constants_1.ERROR_MESSAGES.INTERNAL_ERROR
+            : err.message,
+        ...(config_1.CONFIG.NODE_ENV !== 'production' && { stack: err.stack }),
+    });
+});
+// ============================================================================
+// SERVER INITIALIZATION
+// ============================================================================
+function createServer() {
+    if (config_1.CONFIG.USE_HTTPS) {
+        const certPath = config_1.CONFIG.SSL.CERT_PATH || path_1.default.join(config_1.CONFIG.SSL.BASE_PATH, config_1.CONFIG.SSL.CERT_FILENAME || 'server.crt');
+        const keyPath = config_1.CONFIG.SSL.KEY_PATH || path_1.default.join(config_1.CONFIG.SSL.BASE_PATH, config_1.CONFIG.SSL.KEY_FILENAME || 'server.key');
+        if (!fs_1.default.existsSync(certPath) || !fs_1.default.existsSync(keyPath)) {
+            logger.error('SSL certificates not found', { certPath, keyPath });
+            throw new Error('SSL certificates not found');
+        }
+        const httpsOptions = {
+            cert: fs_1.default.readFileSync(certPath),
+            key: fs_1.default.readFileSync(keyPath),
+        };
+        logger.info('Creating HTTPS server', { certPath, keyPath });
+        return https_1.default.createServer(httpsOptions, app);
+    }
+    logger.info('Creating HTTP server');
+    return http_1.default.createServer(app);
+}
+const server = createServer();
+exports.server = server;
 // Initialize Socket.IO
-const io = (0, SocketEmits_1.initializeSocketIO)(server);
-// Initialize database and start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-    const serverType = server instanceof https_1.default.Server ? 'HTTPS' : 'HTTP';
-    console.log(`🚀 ${serverType} Server running on port ${PORT}`);
-    console.log(`📍 Server URL: ${protocol}://localhost:${PORT}`);
+const io = SocketHandler_1.socketHandler.initialize(server);
+exports.io = io;
+logger.info('Socket.IO initialized');
+// ============================================================================
+// GRACEFUL SHUTDOWN
+// ============================================================================
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+    if (isShuttingDown)
+        return;
+    isShuttingDown = true;
+    logger.info(`Received ${signal}, starting graceful shutdown`);
+    // Stop accepting new connections
+    server.close(() => {
+        logger.info('HTTP server closed');
+    });
+    // Close Socket.IO connections
+    if (io) {
+        io.close(() => {
+            logger.info('Socket.IO server closed');
+        });
+    }
+    // Wait for ongoing requests to complete (max 10 seconds)
+    setTimeout(() => {
+        logger.warn('Forcing shutdown after timeout');
+        process.exit(0);
+    }, 10000);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Unhandled rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Promise Rejection', new Error(String(reason)), {
+        promise: String(promise),
+    });
+});
+// Uncaught exception handler
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception', error);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+// ============================================================================
+// START SERVER
+// ============================================================================
+server.listen(config_1.CONFIG.PORT, () => {
+    const protocol = config_1.CONFIG.USE_HTTPS ? 'https' : 'http';
+    logger.info(`Server started successfully`, {
+        protocol,
+        port: config_1.CONFIG.PORT,
+        environment: config_1.CONFIG.NODE_ENV,
+        url: `${protocol}://localhost:${config_1.CONFIG.PORT}`,
+    });
+    logger.info('Server is ready to accept connections');
 });
