@@ -9,20 +9,22 @@ const DBConnection_1 = __importDefault(require("../DBConnection"));
 const auth_1 = require("../src/utils/auth");
 const setAuthCookie = (res, token) => {
     const isProduction = process.env.NODE_ENV === 'production';
+    const sameSite = isProduction ? 'none' : 'lax';
     res.cookie('auth_token', token, {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        sameSite,
         maxAge: 24 * 60 * 60 * 1000,
         path: '/',
     });
 };
 const clearAuthCookie = (res) => {
     const isProduction = process.env.NODE_ENV === 'production';
+    const sameSite = isProduction ? 'none' : 'lax';
     res.clearCookie('auth_token', {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        sameSite,
         path: '/',
     });
 };
