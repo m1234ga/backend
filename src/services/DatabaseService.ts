@@ -767,6 +767,7 @@ class DatabaseService {
                     `,
                     [ourJid]
                 );
+                console.log('[getWhatsmeowContacts] ourJid result:', result.rows);
                 return result.rows as Array<{
                     their_jid: string;
                     first_name: string | null;
@@ -779,6 +780,7 @@ class DatabaseService {
             const result = await wuzPool.query(
                 'SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts'
             );
+            console.log('[getWhatsmeowContacts] all result:', result.rows);
             return result.rows as Array<{
                 their_jid: string;
                 first_name: string | null;

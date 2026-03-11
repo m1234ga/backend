@@ -558,9 +558,11 @@ class DatabaseService {
                     FROM whatsmeow_contacts
                     WHERE our_jid LIKE '%' || $1 || '%' OR our_jid = $1
                     `, [ourJid]);
+                console.log('[getWhatsmeowContacts] ourJid result:', result.rows);
                 return result.rows;
             }
             const result = await WuzDBConnection_1.default.query('SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts');
+            console.log('[getWhatsmeowContacts] all result:', result.rows);
             return result.rows;
         }
         catch (error) {
