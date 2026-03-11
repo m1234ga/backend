@@ -273,6 +273,11 @@ async function syncDatabaseSchemaOnStartup() {
     const command = mode === 'migrate'
         ? `npx prisma migrate deploy --schema ${schemaFile}`
         : `npx prisma db push --skip-generate --schema ${schemaFile}`;
+    logger.info('DB schema file location', {
+        schemaFile,
+        pointsToAppDatabase: schemaFile.includes('schema.app.prisma'),
+        noteWhatsMeowTablesFromWuzAPI: 'WhatsMeow data is read from WuzAPI database only, not created locally'
+    });
     if (mode === 'migrate' && await shouldBaselineExistingDatabase()) {
         resolveExistingMigrationsAsApplied(schemaFile);
     }

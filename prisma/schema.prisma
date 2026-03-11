@@ -1,3 +1,12 @@
+// ⚠️  DEPRECATED: This schema is no longer used for startup schema sync.
+// 
+// The application now uses schema.app.prisma for ChatApp database management.
+// WhatsMeow tables are no longer created in the ChatApp database—they are read 
+// from the WuzAPI database via WuzDBConnection instead.
+//
+// This file is kept for reference only. All startup schema operations use
+// prisma/schema.app.prisma with DB_SCHEMA_FILE environment variable.
+
 generator client {
   provider = "prisma-client-js"
 }
