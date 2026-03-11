@@ -1,11 +1,22 @@
 import { Pool } from 'pg';
+import { config as loadEnv } from 'dotenv';
+import path from 'path';
+
+const envPaths = [
+  path.join(__dirname, '.env'),
+  path.join(process.cwd(), 'backend', '.env'),
+  path.join(process.cwd(), '.env'),
+];
+
+for (const envPath of envPaths) {
+  const result = loadEnv({ path: envPath });
+  if (!result.error) {
+    break;
+  }
+}
 
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'wuzapi',
-  password: 'q',
-  port: 5432,
+  connectionString: process.env.DATABASE_URL,
 });
 
 // Helper to provide compatibility with existing code that expects getConnection().execute()

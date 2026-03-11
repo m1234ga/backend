@@ -1,4 +1,5 @@
 import prisma from '../../prismaClient';
+import wuzPool from '../../WuzDBConnection';
 import { createLogger } from '../utils/logger';
 import { sanitizeChatId, sanitizePhone } from '../validation/schemas';
 
@@ -79,10 +80,11 @@ class DatabaseService {
      */
     async getUserJid(token: string): Promise<string | null> {
         try {
-            const user = await prisma.users.findFirst({
-                where: { token: token },
-                select: { jid: true },
-            });
+            const result = await wuzPool.query(
+                'SELECT jid FROM users WHERE token = $1 LIMIT 1',
+                [token]
+            );
+            const user = (result.rows?.[0] as { jid: string | null } | undefined) || null;
 
             if (!user) {
                 logger.warn('User not found', { token });
@@ -630,10 +632,11 @@ class DatabaseService {
                 return this.normalizeLidKey(rows[0].lid);
             }
 
-            const legacy = await prisma.whatsmeow_lid_map.findUnique({
-                where: { pn: pnJid },
-                select: { lid: true },
-            });
+            const legacyResult = await wuzPool.query(
+                'SELECT lid FROM whatsmeow_lid_map WHERE pn = $1 OR pn = $2 LIMIT 1',
+                [pnJid, pnBare]
+            );
+            const legacy = (legacyResult.rows?.[0] as { lid: string | null } | undefined) || null;
 
             return legacy?.lid ? this.normalizeLidKey(legacy.lid) : null;
         } catch (error) {
@@ -657,10 +660,11 @@ class DatabaseService {
                 return dbRows[0].phone;
             }
 
-            const legacy = await prisma.whatsmeow_lid_map.findUnique({
-                where: { lid: `${lid}@lid` },
-                select: { pn: true },
-            });
+            const legacyResult = await wuzPool.query(
+                'SELECT pn FROM whatsmeow_lid_map WHERE lid = $1 OR lid = $2 LIMIT 1',
+                [lid, `${lid}@lid`]
+            );
+            const legacy = (legacyResult.rows?.[0] as { pn: string | null } | undefined) || null;
 
             return legacy?.pn ? this.jidToPhone(legacy.pn) : null;
         } catch (error) {
@@ -755,31 +759,33 @@ class DatabaseService {
     }>> {
         try {
             if (ourJid) {
-                return await prisma.$queryRawUnsafe<Array<{
-                    their_jid: string;
-                    first_name: string | null;
-                    full_name: string | null;
-                    push_name: string | null;
-                    business_name: string | null;
-                }>>(
+                const result = await wuzPool.query(
                     `
                     SELECT their_jid, first_name, full_name, push_name, business_name
                     FROM whatsmeow_contacts
                     WHERE our_jid LIKE '%' || $1 || '%' OR our_jid = $1
                     `,
-                    ourJid
+                    [ourJid]
                 );
+                return result.rows as Array<{
+                    their_jid: string;
+                    first_name: string | null;
+                    full_name: string | null;
+                    push_name: string | null;
+                    business_name: string | null;
+                }>;
             }
 
-            return await prisma.$queryRawUnsafe<Array<{
+            const result = await wuzPool.query(
+                'SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts'
+            );
+            return result.rows as Array<{
                 their_jid: string;
                 first_name: string | null;
                 full_name: string | null;
                 push_name: string | null;
                 business_name: string | null;
-            }>>(
-                `SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts`
-            );
+            }>;
         } catch (error) {
             logger.error('Failed to load whatsmeow contacts', error, { ourJid });
             throw error;
@@ -810,10 +816,11 @@ class DatabaseService {
      */
     async getPhoneFromLid(chatId: string): Promise<string | undefined> {
         try {
-            const res = await prisma.whatsmeow_lid_map.findUnique({
-                where: { lid: chatId },
-                select: { pn: true },
-            });
+            const result = await wuzPool.query(
+                'SELECT pn FROM whatsmeow_lid_map WHERE lid = $1 OR lid = $2 LIMIT 1',
+                [chatId, this.normalizeLidKey(chatId)]
+            );
+            const res = (result.rows?.[0] as { pn: string | undefined } | undefined) || undefined;
             return res?.pn;
         } catch (error) {
             logger.error('Failed to get phone from LID', error, { chatId });

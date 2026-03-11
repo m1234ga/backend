@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.databaseService = void 0;
 const prismaClient_1 = __importDefault(require("../../prismaClient"));
+const WuzDBConnection_1 = __importDefault(require("../../WuzDBConnection"));
 const logger_1 = require("../utils/logger");
 const schemas_1 = require("../validation/schemas");
 const logger = (0, logger_1.createLogger)('DatabaseService');
@@ -47,10 +48,8 @@ class DatabaseService {
      */
     async getUserJid(token) {
         try {
-            const user = await prismaClient_1.default.users.findFirst({
-                where: { token: token },
-                select: { jid: true },
-            });
+            const result = await WuzDBConnection_1.default.query('SELECT jid FROM users WHERE token = $1 LIMIT 1', [token]);
+            const user = result.rows?.[0] || null;
             if (!user) {
                 logger.warn('User not found', { token });
                 return null;
@@ -482,10 +481,8 @@ class DatabaseService {
             if (rows[0]?.lid) {
                 return this.normalizeLidKey(rows[0].lid);
             }
-            const legacy = await prismaClient_1.default.whatsmeow_lid_map.findUnique({
-                where: { pn: pnJid },
-                select: { lid: true },
-            });
+            const legacyResult = await WuzDBConnection_1.default.query('SELECT lid FROM whatsmeow_lid_map WHERE pn = $1 OR pn = $2 LIMIT 1', [pnJid, pnBare]);
+            const legacy = legacyResult.rows?.[0] || null;
             return legacy?.lid ? this.normalizeLidKey(legacy.lid) : null;
         }
         catch (error) {
@@ -502,10 +499,8 @@ class DatabaseService {
             if (Array.isArray(dbRows) && dbRows[0]?.phone) {
                 return dbRows[0].phone;
             }
-            const legacy = await prismaClient_1.default.whatsmeow_lid_map.findUnique({
-                where: { lid: `${lid}@lid` },
-                select: { pn: true },
-            });
+            const legacyResult = await WuzDBConnection_1.default.query('SELECT pn FROM whatsmeow_lid_map WHERE lid = $1 OR lid = $2 LIMIT 1', [lid, `${lid}@lid`]);
+            const legacy = legacyResult.rows?.[0] || null;
             return legacy?.pn ? this.jidToPhone(legacy.pn) : null;
         }
         catch (error) {
@@ -558,13 +553,15 @@ class DatabaseService {
     async getWhatsmeowContacts(ourJid) {
         try {
             if (ourJid) {
-                return await prismaClient_1.default.$queryRawUnsafe(`
+                const result = await WuzDBConnection_1.default.query(`
                     SELECT their_jid, first_name, full_name, push_name, business_name
                     FROM whatsmeow_contacts
                     WHERE our_jid LIKE '%' || $1 || '%' OR our_jid = $1
-                    `, ourJid);
+                    `, [ourJid]);
+                return result.rows;
             }
-            return await prismaClient_1.default.$queryRawUnsafe(`SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts`);
+            const result = await WuzDBConnection_1.default.query('SELECT their_jid, first_name, full_name, push_name, business_name FROM whatsmeow_contacts');
+            return result.rows;
         }
         catch (error) {
             logger.error('Failed to load whatsmeow contacts', error, { ourJid });
@@ -594,10 +591,8 @@ class DatabaseService {
      */
     async getPhoneFromLid(chatId) {
         try {
-            const res = await prismaClient_1.default.whatsmeow_lid_map.findUnique({
-                where: { lid: chatId },
-                select: { pn: true },
-            });
+            const result = await WuzDBConnection_1.default.query('SELECT pn FROM whatsmeow_lid_map WHERE lid = $1 OR lid = $2 LIMIT 1', [chatId, this.normalizeLidKey(chatId)]);
+            const res = result.rows?.[0] || undefined;
             return res?.pn;
         }
         catch (error) {

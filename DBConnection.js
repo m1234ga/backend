@@ -2,12 +2,21 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getConnection = getConnection;
 const pg_1 = require("pg");
+const dotenv_1 = require("dotenv");
+const path_1 = require("path");
+const envPaths = [
+    (0, path_1.join)(__dirname, '.env'),
+    (0, path_1.join)(process.cwd(), 'backend', '.env'),
+    (0, path_1.join)(process.cwd(), '.env'),
+];
+for (const envPath of envPaths) {
+    const result = (0, dotenv_1.config)({ path: envPath });
+    if (!result.error) {
+        break;
+    }
+}
 const pool = new pg_1.Pool({
-    user: 'postgres',
-    host: 'localhost',
-    database: 'wuzapi',
-    password: 'q',
-    port: 5432,
+    connectionString: process.env.DATABASE_URL,
 });
 // Helper to provide compatibility with existing code that expects getConnection().execute()
 async function getConnection() {

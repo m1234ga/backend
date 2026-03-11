@@ -8,6 +8,8 @@ import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import cors from 'cors';
 
 // Configuration and utilities
@@ -16,6 +18,8 @@ import { createLogger } from './src/utils/logger';
 import { adjustToConfiguredTimezone } from './src/utils/timezone';
 import { httpRateLimiter } from './src/middleware/rateLimiter';
 import { HTTP_STATUS, ERROR_MESSAGES } from './src/constants';
+import pool from './DBConnection';
+import { hashPassword } from './src/utils/auth';
 
 // Handlers
 import { socketHandler } from './src/handlers/SocketHandler';
@@ -237,20 +241,192 @@ process.on('uncaughtException', (error) => {
     gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
+async function shouldBaselineExistingDatabase(): Promise<boolean> {
+    const migrationTableResult = await pool.query(
+        `
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = '_prisma_migrations'
+        ) AS exists
+        `
+    );
+
+    const hasMigrationTable = Boolean(migrationTableResult.rows[0]?.exists);
+    if (hasMigrationTable) {
+        const appliedMigrationsResult = await pool.query('SELECT COUNT(*)::int AS count FROM "_prisma_migrations"');
+        const appliedMigrationCount = Number(appliedMigrationsResult.rows[0]?.count || 0);
+        if (appliedMigrationCount > 0) {
+            return false;
+        }
+    }
+
+    const appTablesResult = await pool.query(
+        `
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('app_users', 'chats', 'messages', 'contacts')
+        ) AS exists
+        `
+    );
+
+    return Boolean(appTablesResult.rows[0]?.exists);
+}
+
+function resolveExistingMigrationsAsApplied(schemaFile: string): void {
+    const migrationsDir = path.join(__dirname, path.dirname(schemaFile), 'migrations');
+    if (!fs.existsSync(migrationsDir)) {
+        throw new Error(`Prisma migrations directory not found: ${migrationsDir}`);
+    }
+
+    const migrationNames = fs.readdirSync(migrationsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+
+    if (migrationNames.length === 0) {
+        throw new Error(`No Prisma migrations found in ${migrationsDir}`);
+    }
+
+    logger.warn('Existing app database detected without Prisma migration history; baselining migrations as applied', {
+        migrationNames,
+    });
+
+    for (const migrationName of migrationNames) {
+        execSync(`npx prisma migrate resolve --applied ${migrationName} --schema ${schemaFile}`, {
+            stdio: 'inherit',
+            cwd: __dirname,
+            env: process.env,
+        });
+    }
+}
+
+async function syncDatabaseSchemaOnStartup(): Promise<void> {
+    const shouldSync = (process.env.DB_SCHEMA_SYNC_ON_START || 'true').toLowerCase() === 'true';
+    if (!shouldSync) {
+        logger.info('DB schema sync on startup is disabled');
+        return;
+    }
+
+    const mode = (process.env.DB_SCHEMA_SYNC_MODE || 'push').toLowerCase();
+    const schemaFile = process.env.DB_SCHEMA_FILE || 'prisma/schema.app.prisma';
+    const command = mode === 'migrate'
+        ? `npx prisma migrate deploy --schema ${schemaFile}`
+        : `npx prisma db push --skip-generate --schema ${schemaFile}`;
+
+    if (mode === 'migrate' && await shouldBaselineExistingDatabase()) {
+        resolveExistingMigrationsAsApplied(schemaFile);
+    }
+
+    logger.info('Running DB schema sync on startup', { mode, command });
+    execSync(command, {
+        stdio: 'inherit',
+        cwd: __dirname,
+        env: process.env,
+    });
+    logger.info('DB schema sync completed successfully');
+}
+
+async function ensureChatsInfoView(): Promise<void> {
+    const sql = `
+CREATE OR REPLACE VIEW public.chatsinfo AS
+SELECT chats.id,
+       chats."lastMessage",
+       chats."lastMessageTime",
+       chats."unReadCount",
+       chats."isOnline",
+       chats."contactId" AS contactid,
+       chats."isTyping",
+       COALESCE(groups.name, lm.full_name::text, lm.first_name::text, lm.business_name::text, lm.push_name::text, chats.pushname) AS name,
+       COALESCE(lm.phone, (groups.id || '@g.us'::text)::character varying)::character varying(50) AS phone,
+       lm.is_my_contact,
+       lm.is_business,
+       tags.tagsname,
+       chats.isarchived,
+       chats."assignedTo",
+       chats.ismuted,
+       chats.status,
+       chats.avatar,
+       last_msg.status AS "lastMessageStatus"
+FROM chats
+LEFT JOIN lid_mappings lm ON lm.lid::text = chats.id::text
+LEFT JOIN groups ON groups.id = chats.id::text
+LEFT JOIN (
+    SELECT "chatTags"."chatId",
+           string_agg((tags_1."tagName" || '_-_'::text) || tags_1."tagId"::text, '-_-'::text) AS tagsname
+    FROM tags tags_1
+    JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
+    GROUP BY "chatTags"."chatId"
+) tags ON tags."chatId"::text = chats.id::text
+LEFT JOIN LATERAL (
+    SELECT messages.status
+    FROM messages
+    WHERE messages."chatId"::text = chats.id::text
+    ORDER BY messages."timeStamp" DESC
+    LIMIT 1
+) last_msg ON true;
+`;
+
+    logger.info('Ensuring chatsinfo view exists and is up to date');
+    await pool.query(sql);
+}
+
+async function ensureDefaultAdminUser(): Promise<void> {
+    const username = 'admin';
+    const password = 'admin';
+    const email = 'admin@example.com';
+
+    const result = await pool.query(
+        'SELECT id FROM app_users WHERE username = $1 LIMIT 1',
+        [username]
+    );
+
+    if (result.rows.length > 0) {
+        logger.info('Default admin user already exists');
+        return;
+    }
+
+    const passwordHash = await hashPassword(password);
+    await pool.query(
+        `
+        INSERT INTO app_users (id, username, email, password_hash, first_name, last_name, role, is_active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `,
+        [randomUUID(), username, email, passwordHash, 'Admin', 'User', 'admin', true]
+    );
+
+    logger.warn('Default admin user created', { username });
+}
+
 // ============================================================================
 // START SERVER
 // ============================================================================
 
-server.listen(CONFIG.PORT, () => {
-    const protocol = CONFIG.USE_HTTPS ? 'https' : 'http';
-    logger.info(`Server started successfully`, {
-        protocol,
-        port: CONFIG.PORT,
-        environment: CONFIG.NODE_ENV,
-        url: `${protocol}://localhost:${CONFIG.PORT}`,
-    });
+async function startServer(): Promise<void> {
+    try {
+        await syncDatabaseSchemaOnStartup();
+        await ensureChatsInfoView();
+        await ensureDefaultAdminUser();
+    } catch (error) {
+        logger.error('DB schema sync failed, refusing to start server', error);
+        process.exit(1);
+    }
 
-    logger.info('Server is ready to accept connections');
-});
+    server.listen(CONFIG.PORT, () => {
+        const protocol = CONFIG.USE_HTTPS ? 'https' : 'http';
+        logger.info(`Server started successfully`, {
+            protocol,
+            port: CONFIG.PORT,
+            environment: CONFIG.NODE_ENV,
+            url: `${protocol}://localhost:${CONFIG.PORT}`,
+        });
+
+        logger.info('Server is ready to accept connections');
+    });
+}
+
+void startServer();
 
 export { app, server, io };

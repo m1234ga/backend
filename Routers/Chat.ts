@@ -8,8 +8,40 @@ import { verifyToken } from '../src/utils/auth';
 import { socketHandler } from '../src/handlers/SocketHandler';
 import { adjustToConfiguredTimezone } from '../src/utils/timezone';
 import prisma from '../prismaClient';
+import wuzPool from '../WuzDBConnection';
 
 const router = Router();
+
+type WuzUserRow = {
+  id: string;
+  name: string | null;
+  jid: string | null;
+  connected: number | null;
+  token: string | null;
+};
+
+async function findWuzUserById(id: string): Promise<WuzUserRow | null> {
+  const result = await wuzPool.query(
+    'SELECT id, name, jid, connected, token FROM users WHERE id = $1 LIMIT 1',
+    [id]
+  );
+  return (result.rows?.[0] as WuzUserRow | undefined) || null;
+}
+
+async function findWuzUserByName(name: string): Promise<WuzUserRow | null> {
+  const result = await wuzPool.query(
+    'SELECT id, name, jid, connected, token FROM users WHERE name = $1 LIMIT 1',
+    [name]
+  );
+  return (result.rows?.[0] as WuzUserRow | undefined) || null;
+}
+
+async function listWuzUsers(): Promise<Array<Pick<WuzUserRow, 'id' | 'name' | 'jid' | 'connected'>>> {
+  const result = await wuzPool.query(
+    'SELECT id, name, jid, connected FROM users ORDER BY name ASC'
+  );
+  return result.rows as Array<Pick<WuzUserRow, 'id' | 'name' | 'jid' | 'connected'>>;
+}
 
 const nowTimestamp = (): Date => adjustToConfiguredTimezone(new Date());
 
@@ -228,24 +260,15 @@ async function resolveWuzTokenForCurrentUser(req: Request): Promise<string | nul
     // 1) Explicit mapping (source of truth)
     const mappedWuzUserId = await getMappedWuzUserId(identity.userId);
     if (mappedWuzUserId) {
-      const mapped = await prisma.users.findFirst({
-        where: { id: mappedWuzUserId },
-        select: { token: true },
-      });
+      const mapped = await findWuzUserById(mappedWuzUserId);
       if (mapped?.token) return mapped.token;
     }
 
     // 2) Heuristics for backward compatibility
-    const byName = await prisma.users.findFirst({
-      where: { name: identity.username },
-      select: { token: true },
-    });
+    const byName = await findWuzUserByName(identity.username);
     if (byName?.token) return byName.token;
 
-    const byId = await prisma.users.findFirst({
-      where: { id: identity.userId },
-      select: { token: true },
-    });
+    const byId = await findWuzUserById(identity.userId);
     if (byId?.token) return byId.token;
 
     return process.env.WUZAPI_Token || null;
@@ -281,15 +304,7 @@ router.get('/api/settings/wuz-users', async (req: Request, res: Response) => {
 
     await ensureAppUserWuzMappingTable();
     const mappedWuzUserId = await getMappedWuzUserId(identity.userId);
-    const users = await prisma.users.findMany({
-      select: {
-        id: true,
-        name: true,
-        jid: true,
-        connected: true,
-      },
-      orderBy: { name: 'asc' },
-    });
+    const users = await listWuzUsers();
 
     res.json({
       mappedWuzUserId,
@@ -309,7 +324,7 @@ router.post('/api/settings/wuz-mapping', async (req: Request, res: Response) => 
     const wuzUserId = String(req.body?.wuzUserId || '').trim();
     if (!wuzUserId) return res.status(400).json({ error: 'wuzUserId is required' });
 
-    const exists = await prisma.users.findFirst({ where: { id: wuzUserId }, select: { id: true } });
+    const exists = await findWuzUserById(wuzUserId);
     if (!exists) return res.status(404).json({ error: 'Wuz user not found' });
 
     await ensureAppUserWuzMappingTable();
