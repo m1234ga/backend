@@ -116,7 +116,7 @@ class DatabaseService {
         isFromMe: boolean = false
     ): Promise<any> {
         const sanitizedId = sanitizeChatId(id);
-        logger.debug('Upserting chat', { chatId: sanitizedId, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, options, isFromMe });
+        logger.info ('Upserting chat', { chatId: sanitizedId, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, options, isFromMe });
         const status = options?.status || 'open';
         const incrementUnreadOnIncoming = options?.incrementUnreadOnIncoming === true;
         const participants = options?.participants || [];
