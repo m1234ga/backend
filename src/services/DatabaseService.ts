@@ -136,7 +136,7 @@ class DatabaseService {
                 candidateIds.add(canonicalId);
             } else {
                 if (contactBare) {
-                    canonicalId = sanitizeChatId(contactBare) || canonicalId;
+                    canonicalId =  canonicalId||sanitizeChatId(contactBare);
                     candidateIds.add(canonicalId);
 
                     const mappedLid = await this.getLidByPhoneJid(`${contactBare}@s.whatsapp.net`);

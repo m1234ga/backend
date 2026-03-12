@@ -85,7 +85,7 @@ class DatabaseService {
             }
             else {
                 if (contactBare) {
-                    canonicalId = (0, schemas_1.sanitizeChatId)(contactBare) || canonicalId;
+                    canonicalId = canonicalId || (0, schemas_1.sanitizeChatId)(contactBare);
                     candidateIds.add(canonicalId);
                     const mappedLid = await this.getLidByPhoneJid(`${contactBare}@s.whatsapp.net`);
                     if (mappedLid) {
