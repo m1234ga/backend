@@ -201,7 +201,7 @@ class ProcessWhatsAppHooks implements HooksType {
       const messageContactId = isFromMe
         ? (cachedUserJid || this.userJid || 'Me')
         : contactId;
-
+        logger.debug('Upserting message', { messageId, chatId, contactId: messageContactId, isFromMe, content, mediaPath });
       const savedMessage = await databaseService.upsertMessage({
         id: messageId,
         chatId,

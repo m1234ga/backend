@@ -183,6 +183,7 @@ class ProcessWhatsAppHooks {
             const messageContactId = isFromMe
                 ? (cachedUserJid || this.userJid || 'Me')
                 : contactId;
+            logger.debug('Upserting message', { messageId, chatId, contactId: messageContactId, isFromMe, content, mediaPath });
             const savedMessage = await DatabaseService_1.databaseService.upsertMessage({
                 id: messageId,
                 chatId,

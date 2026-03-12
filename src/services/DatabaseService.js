@@ -66,6 +66,7 @@ class DatabaseService {
      */
     async upsertChat(id, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, options, isFromMe = false) {
         const sanitizedId = (0, schemas_1.sanitizeChatId)(id);
+        logger.debug('Upserting chat', { chatId: sanitizedId, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, options, isFromMe });
         const status = options?.status || 'open';
         const incrementUnreadOnIncoming = options?.incrementUnreadOnIncoming === true;
         const participants = options?.participants || [];
