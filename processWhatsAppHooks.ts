@@ -119,33 +119,9 @@ class ProcessWhatsAppHooks implements HooksType {
       // 0b. Determine IDs and names using specialized logic
       const { chatId, phoneRaw, pushName } = await this.getChatId(info);
 
-      // 1. Handle Reactions
-      if (message.reactionMessage) {
-        try {
-          const reaction = message.reactionMessage;
-          const targetMessageId = reaction.key?.ID || reaction.key?.id;
-          const reactionId = info.ID;
-          const participant = (reaction.key?.remoteJID || reaction.key?.participant || info.Sender || info.Participant || "").split("@")[0];
-          const emoji = reaction.text;
-          const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp || Date.now());
 
-          if (targetMessageId && emoji) {
-            await databaseService.upsertReaction(reactionId, targetMessageId, participant, emoji, timestamp);
 
-            // Emit update
-            const updatedReactions = await databaseService.getMessageReactionsWithNames(targetMessageId);
-            socketHandler.getIO()?.emit(SOCKET_EVENTS.REACTION_UPDATED, { chatId, messageId: targetMessageId, reactions: updatedReactions });
-          }
-        } catch (err) {
-          // Ignore P2003 (FK error if message doesn't exist yet)
-          if ((err as any).code !== 'P2003') {
-            logger.error('Error handling reaction', err);
-          }
-        }
-        return; // Reaction handled
-      }
-
-      // 2. Determine basic info (Mirrors old implementation)
+      // 1. Determine basic info (Mirrors old implementation)
       const messageId = info.ID;
       const isFromMe = info.IsFromMe || false;
       const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp);
@@ -160,7 +136,7 @@ class ProcessWhatsAppHooks implements HooksType {
         }
       }
 
-      // 3. Determine message type and content
+      // 2. Determine message type and content
       let messageType = 'text';
       let content = '';
       let mediaPath = undefined;
@@ -205,7 +181,7 @@ class ProcessWhatsAppHooks implements HooksType {
         mediaPath = await this.handleMediaDownload(message.stickerMessage, 'sticker', messageId);
       }
 
-      // 4. Upsert Chat
+      // 3. Upsert Chat
       const unreadCount = typeof info.unreadCount === "number" ? info.unreadCount : undefined;
       const updatedChats = await databaseService.upsertChat(
         chatId,
@@ -221,7 +197,7 @@ class ProcessWhatsAppHooks implements HooksType {
         isFromMe
       );
 
-      // 5. Upsert Message
+      // 4. Upsert Message
       const messageContactId = isFromMe
         ? (cachedUserJid || this.userJid || 'Me')
         : contactId;
@@ -239,7 +215,31 @@ class ProcessWhatsAppHooks implements HooksType {
         userId: isFromMe ? 'Me' : undefined,
         replyToMessageId
       });
+      // 5. Handle Reactions
+      if (message.reactionMessage) {
+        try {
+          const reaction = message.reactionMessage;
+          const targetMessageId = reaction.key?.ID || reaction.key?.id;
+          const reactionId = info.ID;
+          const participant = (reaction.key?.remoteJID || reaction.key?.participant || info.Sender || info.Participant || "").split("@")[0];
+          const emoji = reaction.text;
+          const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp || Date.now());
 
+          if (targetMessageId && emoji) {
+            await databaseService.upsertReaction(reactionId, targetMessageId, participant, emoji, timestamp);
+
+            // Emit update
+            const updatedReactions = await databaseService.getMessageReactionsWithNames(targetMessageId);
+            socketHandler.getIO()?.emit(SOCKET_EVENTS.REACTION_UPDATED, { chatId, messageId: targetMessageId, reactions: updatedReactions });
+          }
+        } catch (err) {
+          // Ignore P2003 (FK error if message doesn't exist yet)
+          if ((err as any).code !== 'P2003') {
+            logger.error('Error handling reaction', err);
+          }
+        }
+        return; // Reaction handled
+      }
       const unreadValue = updatedChats?.[0]?.unReadCount;
 
       // 6. Emit to Socket
@@ -273,26 +273,24 @@ class ProcessWhatsAppHooks implements HooksType {
   private async getChatId(info: any) {
     let source = "";
     let phoneRaw = "";
-    let pushName = info.PushName || "";const
-     senderAlt = info.SenderAlt || "";
-    const sender = info.Sender || info.Participant || "";
+    let pushName = info.PushName || "";
     const isGroup = (info.Chat || "").includes("@g.us");
 
     if (!info.IsFromMe && !isGroup) {
 
-      if (senderAlt.includes("@s.whatsapp.net")) {
-        source = sender;
-        phoneRaw = senderAlt;
-      } else if (sender.endsWith('@lid')) {
-        const resolved = await this.resolvePhoneJidFromLid(sender);
-        phoneRaw = resolved || sender;
-        source = sender;
-      } else if (sender.includes('@s.whatsapp.net')) {
-        source = senderAlt;
-        phoneRaw = sender;
+      if (info.SenderAlt.includes("@s.whatsapp.net")) {
+        source = info.Sender;
+        phoneRaw = info.SenderAlt;
+      } else if (info.Sender.endsWith('@lid')) {
+        const resolved = await this.resolvePhoneJidFromLid(info.Sender);
+        phoneRaw = resolved || info.SenderAlt;
+        source = info.Sender;
+      } else if (info.Sender.includes('@s.whatsapp.net')) {
+        source = info.SenderAlt;
+        phoneRaw = info.Sender;
       } else {
-        source = sender;
-        phoneRaw = sender;
+        source = info.Sender;
+        phoneRaw = info.SenderAlt;
       }
 
       const phone = phoneRaw.includes('@s.whatsapp.net') ? this.jidToPhone(phoneRaw) : '';

@@ -291,6 +291,14 @@ class WhatsAppApiService {
         return this.request(`contact/presence?phone=${encodeURIComponent(phone)}`);
     }
 
+    /**
+     * Get user LID (Local ID)
+     */
+    async getUserLid(phone: string): Promise<ApiResponse> {
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        return this.request(`user/lid/${encodeURIComponent(cleanPhone)}`);
+    }
+
 }
 
 export const whatsAppApiService = WhatsAppApiService.getInstance();

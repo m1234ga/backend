@@ -71,6 +71,39 @@ export class MessageSenderService {
     }
 
     /**
+     * Retrieve LID from WuzAPI for a given phone number
+     * Returns the LID formatted like getChatId but without the @lid suffix
+     */
+    private async retrieveLidFromWuzAPI(phone: string): Promise<{ lid?: string; error?: string }> {
+        try {
+            const cleanPhone = phone.replace(/[^0-9]/g, '');
+            if (!cleanPhone) {
+                return { error: 'Invalid phone number' };
+            }
+
+            const response = await whatsAppApiService.getUserLid(cleanPhone);
+            
+            if (!response.success || !response.data) {
+                logger.warn('Failed to retrieve LID from WuzAPI', { phone: cleanPhone, error: response.error });
+                return { error: response.error };
+            }
+
+            // Extract LID from response (format: "123456789" without @lid)
+            const lid = response.data.lid || response.data.Lid || response.data.ID || response.data.id;
+            if (!lid) {
+                logger.warn('LID not found in WuzAPI response', { phone: cleanPhone, response: response.data });
+                return { error: 'LID not found in response' };
+            }
+
+            logger.debug('Successfully retrieved LID from WuzAPI', { phone: cleanPhone, lid });
+            return { lid: lid.toString() };
+        } catch (err) {
+            logger.error('Error retrieving LID from WuzAPI', err, { phone });
+            return { error: err instanceof Error ? err.message : 'Unknown error' };
+        }
+    }
+
+    /**
      * Build forward/reply context for WhatsApp
      */
     private buildContext(message: ChatMessage): any {
@@ -221,6 +254,14 @@ export class MessageSenderService {
                 return { success: false, error: 'Phone number is required' };
             }
 
+            // Retrieve LID and use it as chatId for 1-on-1 chats where phone === chatId
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+                logger.debug('Using LID as chatId', { phone: message.phone, lid: contactLid });
+            }
+
             const messageId = uuidv4();
             const contextInfo = this.buildContext(message);
 
@@ -285,6 +326,14 @@ export class MessageSenderService {
 
             if (!message.phone || !imageFile) {
                 return { success: false, error: 'Phone and image file are required' };
+            }
+
+            // Retrieve LID and use it as chatId for 1-on-1 chats where phone === chatId
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+                logger.debug('Using LID as chatId', { phone: message.phone, lid: contactLid });
             }
 
             const imageBuffer = fs.readFileSync(imageFile.path);
@@ -358,6 +407,14 @@ export class MessageSenderService {
                 return { success: false, error: 'Phone and video file are required' };
             }
 
+            // Retrieve LID and use it as chatId for 1-on-1 chats where phone === chatId
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+                logger.debug('Using LID as chatId', { phone: message.phone, lid: contactLid });
+            }
+
             const videoBuffer = fs.readFileSync(videoFile.path);
             const base64Video = videoBuffer.toString('base64');
             const messageId = uuidv4();
@@ -427,6 +484,14 @@ export class MessageSenderService {
 
             if (!message.phone || !audioFile) {
                 return { success: false, error: 'Phone and audio file are required' };
+            }
+
+            // Retrieve LID and use it as chatId for 1-on-1 chats where phone === chatId
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+                logger.debug('Using LID as chatId', { phone: message.phone, lid: contactLid });
             }
 
             const audioBuffer = fs.readFileSync(audioFile.path);
@@ -500,6 +565,14 @@ export class MessageSenderService {
 
             if (!message.phone || !documentFile) {
                 return { success: false, error: 'Phone and document file are required' };
+            }
+
+            // Retrieve LID and use it as chatId for 1-on-1 chats where phone === chatId
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+                logger.debug('Using LID as chatId', { phone: message.phone, lid: contactLid });
             }
 
             const documentBuffer = fs.readFileSync(documentFile.path);

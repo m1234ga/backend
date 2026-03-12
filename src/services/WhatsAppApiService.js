@@ -229,5 +229,12 @@ class WhatsAppApiService {
     async getContactPresence(phone) {
         return this.request(`contact/presence?phone=${encodeURIComponent(phone)}`);
     }
+    /**
+     * Get user LID (Local ID)
+     */
+    async getUserLid(phone) {
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        return this.request(`user/lid/${encodeURIComponent(cleanPhone)}`);
+    }
 }
 exports.whatsAppApiService = WhatsAppApiService.getInstance();
