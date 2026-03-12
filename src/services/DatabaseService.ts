@@ -767,6 +767,7 @@ class DatabaseService {
                     `,
                     [ourJid]
                 );
+                console.log(ourJid);
                 console.log('[getWhatsmeowContacts] ourJid result:', result.rows);
                 return result.rows as Array<{
                     their_jid: string;

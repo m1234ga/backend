@@ -558,6 +558,7 @@ class DatabaseService {
                     FROM whatsmeow_contacts
                     WHERE our_jid LIKE '%' || $1 || '%' OR our_jid = $1
                     `, [ourJid]);
+                console.log(ourJid);
                 console.log('[getWhatsmeowContacts] ourJid result:', result.rows);
                 return result.rows;
             }

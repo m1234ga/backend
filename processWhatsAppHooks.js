@@ -395,11 +395,11 @@ class ProcessWhatsAppHooks {
             const data = event.Data;
             // CRITICAL: syncType check from old code
             const VALID_SYNC_TYPES = new Set([0]); // BOOTSTRAP, FULL, RECENT, ON_DEMAND
+            if (data.phoneNumberToLidMappings)
+                await this.cachePhoneNumberToLidMappings(data.phoneNumberToLidMappings);
             if (!VALID_SYNC_TYPES.has(data.syncType)) {
                 return logger.debug(`Skipping HistorySync with syncType ${data.syncType}`);
             }
-            if (data.phoneNumberToLidMappings)
-                await this.cachePhoneNumberToLidMappings(data.phoneNumberToLidMappings);
             if (!Array.isArray(data.conversations))
                 return;
             logger.info(`Processing History Sync for ${data.conversations.length} conversations`);

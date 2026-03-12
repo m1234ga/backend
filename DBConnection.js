@@ -1,13 +1,16 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getConnection = getConnection;
 const pg_1 = require("pg");
 const dotenv_1 = require("dotenv");
-const path_1 = require("path");
+const path_1 = __importDefault(require("path"));
 const envPaths = [
-    (0, path_1.join)(__dirname, '.env'),
-    (0, path_1.join)(process.cwd(), 'backend', '.env'),
-    (0, path_1.join)(process.cwd(), '.env'),
+    path_1.default.join(__dirname, '.env'),
+    path_1.default.join(process.cwd(), 'backend', '.env'),
+    path_1.default.join(process.cwd(), '.env'),
 ];
 for (const envPath of envPaths) {
     const result = (0, dotenv_1.config)({ path: envPath });
