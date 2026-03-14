@@ -142,25 +142,45 @@ router.get('/api/GetChats', async (req: Request, res: Response) => {
   }
 });
 
-// Paginated chats endpoint: supports ?page=1&limit=20&status=open
+// Paginated chats endpoint: supports ?page=1&limit=20&status=open&tab=assigned
 router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
   try {
     const page = Math.max(parseInt((req.query.page as string) || '1', 10), 1);
     const limit = Math.max(parseInt((req.query.limit as string) || '200', 10), 1);
     const offset = (page - 1) * limit;
     const status = (req.query.status as string) || null;
+    const tab = String((req.query.tab as string) || 'chats').trim().toLowerCase();
 
     let baseSql = 'SELECT ci.*, c."closeReason" as reason FROM chatsInfo ci LEFT JOIN chats c ON ci.id = c.id';
     const params: any[] = [];
+
+    const whereClauses: string[] = [];
     if (status) {
-      baseSql += ' WHERE ci.status = $1';
+      whereClauses.push(`ci.status = $${params.length + 1}`);
       params.push(status);
     }
+
+    if (tab === 'assigned') {
+      const identity = getCurrentAppIdentity(req);
+      if (!identity?.userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      whereClauses.push(`ci."assignedTo" = $${params.length + 1}`);
+      params.push(identity.userId);
+    } else if (tab === 'archived') {
+      whereClauses.push('ci.isarchived = TRUE');
+    }
+
+    if (whereClauses.length > 0) {
+      baseSql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+
     baseSql += ' ORDER BY ci."lastMessageTime" DESC, ci.id DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
 
     const chats = await prisma.$queryRawUnsafe(baseSql, ...params);
-    res.json({ page, limit, chats });
+    res.json({ page, limit, tab, chats });
   } catch (error) {
     console.error('Error fetching paginated chats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
