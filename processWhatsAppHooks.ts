@@ -68,6 +68,28 @@ class ProcessWhatsAppHooks implements HooksType {
     return (value || '').split('@')[0] || '';
   }
 
+  private sanitizeLid(value: string): string {
+    return (value || '').trim().split('@')[0] || '';
+  }
+
+  private async getDirectChatLid(phone: string): Promise<string> {
+    const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
+    if (!cleanPhone) return '';
+
+    try {
+      const response = await whatsAppApiService.getUserLid(cleanPhone);
+      if (!response?.success || !response.data) {
+        return '';
+      }
+
+      const rawLid = response.data.lid || response.data.Lid || response.data.ID || response.data.id;
+      return this.sanitizeLid(String(rawLid || ''));
+    } catch (err) {
+      logger.warn('Failed to resolve direct chat LID from WuzAPI', { phone: cleanPhone, err });
+      return '';
+    }
+  }
+
   private normalizeTimestamp(raw: any): string {
     if (!raw) return adjustToConfiguredTimezone(new Date()).toISOString();
 
@@ -294,7 +316,8 @@ class ProcessWhatsAppHooks implements HooksType {
       }
 
       const phone = phoneRaw.includes('@s.whatsapp.net') ? this.jidToPhone(phoneRaw) : '';
-      const chatIdStr = this.jidToPhone(phoneRaw || source);
+      const resolvedChatLid = phone ? await this.getDirectChatLid(phone) : '';
+      const chatIdStr = resolvedChatLid || this.jidToPhone(phoneRaw || source);
 
       if (phone) {
         const resolved = await databaseService.resolveContactName(phone);
@@ -320,6 +343,8 @@ class ProcessWhatsAppHooks implements HooksType {
           isBusiness: false,
         });
       }
+
+      source = chatIdStr;
     } else {
       source = info.Chat || info.RemoteJid || info.Sender || "";
       phoneRaw = info.Sender || info.Participant || "";
@@ -330,7 +355,9 @@ class ProcessWhatsAppHooks implements HooksType {
       }
     }
 
-    const chatId = source?.match(/^[^@:]+/)?.[0] || "";
+    const chatId = isGroup
+      ? (source?.match(/^[^@:]+/)?.[0] || "")
+      : this.sanitizeLid(source || phoneRaw);
     phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
     return { chatId, phoneRaw, pushName };
   }

@@ -58,6 +58,26 @@ class ProcessWhatsAppHooks {
     jidToPhone(value) {
         return (value || '').split('@')[0] || '';
     }
+    sanitizeLid(value) {
+        return (value || '').trim().split('@')[0] || '';
+    }
+    async getDirectChatLid(phone) {
+        const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
+        if (!cleanPhone)
+            return '';
+        try {
+            const response = await WhatsAppApiService_1.whatsAppApiService.getUserLid(cleanPhone);
+            if (!response?.success || !response.data) {
+                return '';
+            }
+            const rawLid = response.data.lid || response.data.Lid || response.data.ID || response.data.id;
+            return this.sanitizeLid(String(rawLid || ''));
+        }
+        catch (err) {
+            logger.warn('Failed to resolve direct chat LID from WuzAPI', { phone: cleanPhone, err });
+            return '';
+        }
+    }
     normalizeTimestamp(raw) {
         if (!raw)
             return (0, timezone_1.adjustToConfiguredTimezone)(new Date()).toISOString();
@@ -272,7 +292,8 @@ class ProcessWhatsAppHooks {
                 phoneRaw = info.SenderAlt;
             }
             const phone = phoneRaw.includes('@s.whatsapp.net') ? this.jidToPhone(phoneRaw) : '';
-            const chatIdStr = this.jidToPhone(phoneRaw || source);
+            const resolvedChatLid = phone ? await this.getDirectChatLid(phone) : '';
+            const chatIdStr = resolvedChatLid || this.jidToPhone(phoneRaw || source);
             if (phone) {
                 const resolved = await DatabaseService_1.databaseService.resolveContactName(phone);
                 if (resolved?.displayName) {
@@ -298,6 +319,7 @@ class ProcessWhatsAppHooks {
                     isBusiness: false,
                 });
             }
+            source = chatIdStr;
         }
         else {
             source = info.Chat || info.RemoteJid || info.Sender || "";
@@ -309,7 +331,9 @@ class ProcessWhatsAppHooks {
                 phoneRaw = info.SenderAlt || info.Sender;
             }
         }
-        const chatId = source?.match(/^[^@:]+/)?.[0] || "";
+        const chatId = isGroup
+            ? (source?.match(/^[^@:]+/)?.[0] || "")
+            : this.sanitizeLid(source || phoneRaw);
         phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
         return { chatId, phoneRaw, pushName };
     }

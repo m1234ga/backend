@@ -48,8 +48,12 @@ class MessageSenderService {
                 logger.warn('LID not found in WuzAPI response', { phone: cleanPhone, response: response.data });
                 return { error: 'LID not found in response' };
             }
-            logger.debug('Successfully retrieved LID from WuzAPI', { phone: cleanPhone, lid });
-            return { lid: lid.toString() };
+            const sanitizedLid = lid.toString().trim().split('@')[0] || '';
+            if (!sanitizedLid) {
+                return { error: 'LID could not be sanitized' };
+            }
+            logger.debug('Successfully retrieved LID from WuzAPI', { phone: cleanPhone, lid: sanitizedLid });
+            return { lid: sanitizedLid };
         }
         catch (err) {
             logger.error('Error retrieving LID from WuzAPI', err, { phone });
