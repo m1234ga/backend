@@ -31,6 +31,7 @@ import reportsRouter from './Routers/Reports';
 import dashboardRouter from './Routers/Dashboard';
 import authRouter from './Routers/Auth';
 import processWhatsAppHooks from './processWhatsAppHooks';
+import { authMiddleware, adminMiddleware } from './middleware/authMiddleware';
 
 const logger = createLogger('Server');
 
@@ -116,10 +117,10 @@ app.get('/health', (req: Request, res: Response) => {
 
 // API routes
 app.use('/api/auth', authRouter);
-app.use('/api/chat', chatRouter);
-app.use('/api/user-management', userManagementRouter);
-app.use('/api/reports', reportsRouter);
-app.use('/api/dashboard', dashboardRouter);
+app.use('/api/chat', authMiddleware, chatRouter);
+app.use('/api/user-management', adminMiddleware, userManagementRouter);
+app.use('/api/reports', adminMiddleware, reportsRouter);
+app.use('/api/dashboard', adminMiddleware, dashboardRouter);
 
 // WhatsApp webhook
 app.post('/webhook', async (req: Request, res: Response) => {

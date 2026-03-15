@@ -33,6 +33,7 @@ const Reports_1 = __importDefault(require("./Routers/Reports"));
 const Dashboard_1 = __importDefault(require("./Routers/Dashboard"));
 const Auth_1 = __importDefault(require("./Routers/Auth"));
 const processWhatsAppHooks_1 = __importDefault(require("./processWhatsAppHooks"));
+const authMiddleware_1 = require("./middleware/authMiddleware");
 const logger = (0, logger_1.createLogger)('Server');
 // Validate configuration on startup
 try {
@@ -107,10 +108,10 @@ app.get('/health', (req, res) => {
 });
 // API routes
 app.use('/api/auth', Auth_1.default);
-app.use('/api/chat', Chat_1.default);
-app.use('/api/user-management', UserManagement_1.default);
-app.use('/api/reports', Reports_1.default);
-app.use('/api/dashboard', Dashboard_1.default);
+app.use('/api/chat', authMiddleware_1.authMiddleware, Chat_1.default);
+app.use('/api/user-management', authMiddleware_1.adminMiddleware, UserManagement_1.default);
+app.use('/api/reports', authMiddleware_1.adminMiddleware, Reports_1.default);
+app.use('/api/dashboard', authMiddleware_1.adminMiddleware, Dashboard_1.default);
 // WhatsApp webhook
 app.post('/webhook', async (req, res) => {
     try {
