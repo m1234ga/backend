@@ -78,6 +78,7 @@ class WhatsAppApiService {
      * Send text message
      */
     async sendTextMessage(phone, body, id, contextInfo) {
+        logger.info('Sending text message', { phone, bodyLength: body, id, contextInfo });
         return this.request('chat/send/text', 'POST', {
             Phone: phone,
             Body: body,
