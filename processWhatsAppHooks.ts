@@ -71,25 +71,6 @@ class ProcessWhatsAppHooks implements HooksType {
   private sanitizeLid(value: string): string {
     return (value || '').trim().split('@')[0] || '';
   }
-
-  private async getDirectChatLid(phone: string): Promise<string> {
-    const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
-    if (!cleanPhone) return '';
-
-    try {
-      const response = await whatsAppApiService.getUserLid(cleanPhone);
-      if (!response?.success || !response.data) {
-        return '';
-      }
-
-      const rawLid = response.data.lid || response.data.Lid || response.data.ID || response.data.id;
-      return this.sanitizeLid(String(rawLid || ''));
-    } catch (err) {
-      logger.warn('Failed to resolve direct chat LID from WuzAPI', { phone: cleanPhone, err });
-      return '';
-    }
-  }
-
   private normalizeTimestamp(raw: any): string {
     if (!raw) return adjustToConfiguredTimezone(new Date()).toISOString();
 
@@ -239,7 +220,7 @@ class ProcessWhatsAppHooks implements HooksType {
         pushName,
         contactId,
         this.userJid,
-        { incrementUnreadOnIncoming: isLiveMessage }, // options
+        { incrementUnreadOnIncoming: isLiveMessage, callerFunctionName: 'processSingleMessage' }, // options
         isFromMe
       );
 
@@ -316,76 +297,127 @@ class ProcessWhatsAppHooks implements HooksType {
   /**
    * Determine the true chatId and phone using local LID mappings and local DB only.
    */
-  private async getChatId(info: any) {
-    let source = "";
-    let phoneRaw = "";
-    let pushName = info.PushName || "";
-    const isGroup = (info.Chat || "").includes("@g.us");
+private async getChatId(info: any) {  
+  const isGroup = (info.Chat || "").includes("@g.us");
 
-    if (!info.IsFromMe && !isGroup) {
+  let source = "";
+  let phoneRaw = "";
+  let pushName = info.PushName || "";
 
-      if (info.SenderAlt.includes("@s.whatsapp.net")) {
-        source = info.Sender;
-        phoneRaw = info.SenderAlt;
-      } else if (info.Sender.endsWith('@lid')) {
-        const resolved = await this.resolvePhoneJidFromLid(info.Sender);
-        phoneRaw = resolved || info.SenderAlt;
-        source = info.Sender;
-      } else if (info.Sender.includes('@s.whatsapp.net')) {
-        source = info.SenderAlt;
-        phoneRaw = info.Sender;
-      } else {
-        source = info.Sender;
-        phoneRaw = info.SenderAlt;
-      }
-
-      const phone = phoneRaw.includes('@s.whatsapp.net') ? this.jidToPhone(phoneRaw) : '';
-      const resolvedChatLid = phone ? await this.getDirectChatLid(phone) : '';
-      const chatIdStr = resolvedChatLid || this.jidToPhone(phoneRaw || source);
-
-      if (phone) {
-        const resolved = await databaseService.resolveContactName(phone);
-        if (resolved?.displayName) {
-          pushName = resolved.displayName;
-        } else if (!pushName) {
-          pushName = phone;
-        }
-      }
-
-      if (pushName) info.PushName = pushName;
-      if (phoneRaw) info.Sender = phoneRaw;
-
-      if (phone) {
-        await databaseService.upsertLidMapping({
-          lid: phone,
-          phone,
-          pushName,
-          fullName: null,
-          firstName: null,
-          businessName: null,
-          isMyContact: false,
-          isBusiness: false,
-        });
-      }
-
-      source = chatIdStr;
-    } else {
-      source = info.Chat || info.RemoteJid || info.Sender || "";
-      phoneRaw = info.Sender || info.Participant || "";
-     if (info.Sender.includes('@s.whatsapp.net')) {
-        phoneRaw = info.Sender;
-      } else {
-        phoneRaw = info.SenderAlt||info.Sender;
-      }
-    }
-
-    const chatId = isGroup
-      ? (source?.match(/^[^@:]+/)?.[0] || "")
-      : this.sanitizeLid(source || phoneRaw);
-    phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
-    return { chatId, phoneRaw, pushName };
+  if (!isGroup) {
+    ({ source, phoneRaw } = await this.resolveDirectChatSource(info));
+  } else {
+    ({ source, phoneRaw } = this.resolveGroupSource(info));
   }
 
+  // normalize sender
+  if (phoneRaw) info.Sender = phoneRaw;
+  if (pushName) info.PushName = pushName;
+
+  const phone = phoneRaw.includes("@s.whatsapp.net")
+    ? this.jidToPhone(phoneRaw)
+    : "";
+
+  if (phone) {
+    pushName = await this.resolveAndStoreContact(phone, pushName);
+  }
+
+  const chatId = isGroup
+    ? source?.match(/^[^@:]+/)?.[0] || ""
+    : this.sanitizeLid(source || phoneRaw);
+
+  phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
+
+  return { chatId, phoneRaw, pushName };
+}
+private resolveGroupSource(info: any) {
+  const source = info.Chat || info.RemoteJid || info.Sender || "";
+
+  let phoneRaw = info.Sender || info.Participant || "";
+
+  if (!info.Sender?.includes("@s.whatsapp.net")) {
+    phoneRaw = info.SenderAlt || info.Sender;
+  }
+
+  return { source, phoneRaw };
+}
+private async resolveDirectChatSource(info: any) {
+  let source = "";
+  let phoneRaw = "";
+
+  if (!info.IsFromMe) {
+    if (info.SenderAlt?.includes("@s.whatsapp.net")) {
+      source = info.Sender;
+      phoneRaw = info.SenderAlt;
+    }
+
+    else if (info.Sender?.endsWith("@lid")) {
+      const resolved = await this.resolvePhoneJidFromLid(info.Sender);
+      phoneRaw = resolved || info.SenderAlt;
+      source = info.Sender;
+    }
+
+    else if (info.Sender?.includes("@s.whatsapp.net")) {
+      source = info.SenderAlt;
+      phoneRaw = info.Sender;
+    }
+
+    else {
+      source = info.Sender;
+      phoneRaw = info.SenderAlt;
+    }
+  }
+
+  else {
+    if ((info.RecipientAlt || "").includes("@lid")) {
+      source = info.RecipientAlt;
+      phoneRaw = (info.Chat || "").includes("@s.whatsapp.net")
+        ? info.Chat
+        : info.Sender;
+    }
+
+    else if (info.Sender?.includes("@s.whatsapp.net")) {
+      source = info.Chat || info.RemoteJid || info.Sender || "";
+      phoneRaw = info.Sender;
+    }
+
+    else if (info.SenderAlt?.includes("@lid")) {
+      source = info.SenderAlt || info.Chat || info.RemoteJid || "";
+      phoneRaw = info.Sender || info.SenderAlt;
+    }
+
+    else {
+      source = info.Chat || info.RemoteJid || info.Sender || "";
+      phoneRaw = info.SenderAlt || info.Sender;
+    }
+  }
+
+  return { source, phoneRaw };
+}
+private async resolveAndStoreContact(phone: string, pushName: string) {
+
+  const resolved = await databaseService.resolveContactName(phone);
+
+  if (resolved?.displayName) {
+    pushName = resolved.displayName;
+  } 
+  else if (!pushName) {
+    pushName = phone;
+  }
+
+  await databaseService.upsertLidMapping({
+    lid: phone,
+    phone,
+    pushName,
+    fullName: null,
+    firstName: null,
+    businessName: null,
+    isMyContact: false,
+    isBusiness: false,
+  });
+
+  return pushName;
+}
   private async handleMediaDownload(mediaMsg: any, type: 'image' | 'video' | 'audio' | 'document' | 'sticker', messageId: string): Promise<string | undefined> {
     try {
       const mediaInfo = {
@@ -503,7 +535,7 @@ class ProcessWhatsAppHooks implements HooksType {
    */
   private async processConversation(con: any): Promise<void> {
     try {
-      const id = con.id || con.ID || con.jid;
+      const id = con.accountLid||con.id || con.ID || con.jid;
       if (!id) return;
 
       const conversationId = id.split('@')[0];
@@ -530,22 +562,10 @@ class ProcessWhatsAppHooks implements HooksType {
         const firstName = con.FirstName || con.firstName || null;
         const businessName = con.BusinessName || con.businessName || null;
         const profilePushName = con.PushName || con.pushName || null;
-
-        let resolvedPhoneJid = '';
-        let lidKey = '';
-        if (id.endsWith('@lid')) {
-          lidKey = this.jidToPhone(id);
-          const resolved = await this.resolvePhoneJidFromLid(id);
-          resolvedPhoneJid = resolved || '';
-        } else if (id.endsWith('@s.whatsapp.net')) {
-          resolvedPhoneJid = id;
-          lidKey = this.jidToPhone(id);
-        }
-
-        const phone = this.jidToPhone(resolvedPhoneJid);
+        const phone=con.pnJID.split('@')[0] || '';
         if (phone) {
           await databaseService.upsertLidMapping({
-            lid: lidKey || phone,
+            lid: id,
             phone,
             fullName,
             firstName,
@@ -569,7 +589,7 @@ class ProcessWhatsAppHooks implements HooksType {
           pushName,
           id, // original contactId
           this.userJid,
-          { participants },
+          { participants, callerFunctionName: 'processConversation' },
           id.includes('@s.whatsapp.net') && con.messages?.[0]?.message?.key?.fromMe // approximate isFromMe
         );
       }
@@ -586,11 +606,11 @@ class ProcessWhatsAppHooks implements HooksType {
           if (!messageWrapper?.messageTimestamp || !key) continue;
 
           const groupMessage = id.includes('@g.us');
-          const senderJid = key.participant || key.remoteJID || id;
+          const senderJid = id.split('@')[0] || '';
           const senderBare = senderJid.split('@')[0] || '';
-          const senderAlt = await this.resolveSenderAltFromMappings(senderJid, key.remoteJID || id);
+          const senderAlt =con.pnJID;
 
-          let contactId = '';
+          let contactId =key.remoteJID.split('@')[0] || '';
           if (key.fromMe) {
             contactId = (this.userJid || '').split('@')[0] || 'Me';
           } else if (groupMessage) {
@@ -606,11 +626,11 @@ class ProcessWhatsAppHooks implements HooksType {
 
           // Construct standard Info block expected by processSingleMessage
           const info = {
-            Chat: key.remoteJID,
+            Chat: id,
             Timestamp: messageWrapper.messageTimestamp,
             ID: key.ID,
             IsFromMe: key.fromMe,
-            Sender: senderJid,
+            Sender: id,
             SenderAlt: senderAlt,
             ContactId: contactId,
             PushName: msg.pushname || messageWrapper.pushName || con.pushName || con.subject,

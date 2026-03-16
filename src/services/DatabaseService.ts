@@ -10,6 +10,7 @@ export interface UpsertChatOptions {
     status?: string;
     participants?: any[];
     incrementUnreadOnIncoming?: boolean;
+    callerFunctionName?: string;
 }
 
 export interface MessageData {
@@ -117,6 +118,21 @@ class DatabaseService {
     ): Promise<any> {
         const sanitizedId = sanitizeChatId(id);
         logger.info ('Upserting chat', { chatId: sanitizedId, lastMessage, lastMessageTime, unreadCount, isOnline, isTyping, pushname, contactId, userId, options, isFromMe });
+        const callerFunctionName = (options?.callerFunctionName || 'unknown').trim() || 'unknown';
+
+        try {
+            await prisma.$executeRawUnsafe(
+                `
+                INSERT INTO upsert_chat_call_logs (function_name, chat_id)
+                VALUES ($1, $2)
+                `,
+                callerFunctionName,
+                sanitizedId
+            );
+        } catch (error) {
+            logger.warn('Failed to store upsertChat call log', { chatId: sanitizedId, error });
+        }
+
         const status = options?.status || 'open';
         const incrementUnreadOnIncoming = options?.incrementUnreadOnIncoming === true;
         const participants = options?.participants || [];

@@ -161,7 +161,7 @@ class MessageSenderService {
         return await DatabaseService_1.databaseService.upsertChat(message.chatId, content, timestamp, 0, // unreadCount
         false, // isOnline
         false, // isTyping
-        message.pushName ?? '', message.ContactId || message.phone, userId || 'current_user', undefined, true // isFromMe
+        message.pushName ?? '', message.ContactId || message.phone, userId || 'current_user', { callerFunctionName: 'updateChat' }, true // isFromMe
         );
     }
     /**

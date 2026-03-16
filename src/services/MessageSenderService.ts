@@ -252,7 +252,7 @@ export class MessageSenderService {
             message.pushName ?? '',
             message.ContactId || message.phone,
             userId || 'current_user',
-            undefined,
+            { callerFunctionName: 'updateChat' },
             true // isFromMe
         );
     }
