@@ -72,42 +72,14 @@ class DatabaseService {
         const participants = options?.participants || [];
         try {
             const normalizedLastMessageTime = this.toDate(lastMessageTime);
-            const contactRaw = (contactId || '').toString();
-            const contactBare = (0, schemas_1.sanitizePhone)(contactRaw || '');
-            const candidateIds = new Set([sanitizedId]);
-            let canonicalId = sanitizedId;
-            const incomingIsLid = (id || '').includes('@lid') || contactRaw.includes('@lid');
-            if (incomingIsLid) {
-                // Keep chat identity on LID to match message chatId handling.
-                const normalizedLid = this.normalizeLidKey(contactRaw || id);
-                canonicalId = (0, schemas_1.sanitizeChatId)(normalizedLid) || canonicalId;
-                candidateIds.add(canonicalId);
-            }
-            else {
-                if (contactBare) {
-                    canonicalId = canonicalId || (0, schemas_1.sanitizeChatId)(contactBare);
-                    candidateIds.add(canonicalId);
-                    const mappedLid = await this.getLidByPhoneJid(`${contactBare}@s.whatsapp.net`);
-                    if (mappedLid) {
-                        candidateIds.add((0, schemas_1.sanitizeChatId)(mappedLid));
-                    }
-                }
-            }
             let existingChat = null;
-            const orderedLookupIds = [canonicalId, ...Array.from(candidateIds).filter(cid => cid !== canonicalId)];
-            for (const lookupId of orderedLookupIds) {
-                if (!lookupId)
-                    continue;
-                const found = await prismaClient_1.default.chats.findUnique({
-                    where: { id: lookupId },
-                    select: { id: true, unReadCount: true, pushname: true, participants: true, contactId: true },
-                });
-                if (found) {
-                    existingChat = found;
-                    break;
-                }
-            }
-            const targetChatId = existingChat?.id || canonicalId;
+            const found = await prismaClient_1.default.chats.findUnique({
+                where: { id: sanitizedId },
+                select: { id: true, unReadCount: true, pushname: true, participants: true, contactId: true },
+            });
+            if (found)
+                existingChat = found;
+            const targetChatId = existingChat?.id || sanitizedId;
             const isTypingStr = isTyping ? '1' : '0';
             const participantsVal = participants.length > 0 ? participants : (existingChat?.participants ?? []);
             if (existingChat) {
@@ -138,14 +110,14 @@ class DatabaseService {
                         participants: participantsVal,
                     },
                 });
-                logger.debug('Chat updated', { chatId: targetChatId, canonicalId });
+                logger.debug('Chat updated', { chatId: targetChatId, sanitizedId });
                 return [updated];
             }
             else {
                 // Create new chat
                 const created = await prismaClient_1.default.chats.create({
                     data: {
-                        id: canonicalId,
+                        id: sanitizedId,
                         lastMessage,
                         lastMessageTime: normalizedLastMessageTime,
                         unReadCount: unreadCount !== null && unreadCount !== undefined
@@ -160,7 +132,7 @@ class DatabaseService {
                         participants: participantsVal,
                     },
                 });
-                logger.info('Chat created', { chatId: canonicalId });
+                logger.info('Chat created', { chatId: sanitizedId });
                 return [created];
             }
         }

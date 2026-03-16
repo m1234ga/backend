@@ -10,3 +10,4 @@
 *.crt
 *.env
 /src/generated/prisma
+/docs

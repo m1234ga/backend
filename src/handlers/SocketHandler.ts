@@ -10,6 +10,10 @@ import {
     videoUploadSchema,
     audioUploadSchema,
     documentUploadSchema,
+    stickerUploadSchema,
+    locationMessageSchema,
+    contactMessageSchema,
+    pollMessageSchema,
     typingDataSchema,
     forwardMessageSchema,
     sanitizeFilename,
@@ -107,6 +111,10 @@ export class SocketHandler {
             this.registerHandler(socket, 'send_audio', this.handleSendAudio.bind(this));
             this.registerHandler(socket, 'send_audio_message', this.handleSendAudio.bind(this));
             this.registerHandler(socket, 'send_document', this.handleSendDocument.bind(this));
+            this.registerHandler(socket, 'send_sticker', this.handleSendSticker.bind(this));
+            this.registerHandler(socket, 'send_location', this.handleSendLocation.bind(this));
+            this.registerHandler(socket, 'send_contact', this.handleSendContact.bind(this));
+            this.registerHandler(socket, 'send_poll', this.handleSendPoll.bind(this));
             this.registerHandler(socket, 'typing', this.handleTyping.bind(this));
             this.registerHandler(socket, 'message_forwarded', this.handleForwardMessage.bind(this));
             this.registerHandler(socket, 'cancel_recording', this.handleCancelRecording.bind(this));
@@ -368,6 +376,247 @@ export class SocketHandler {
             }
             throw error;
         }
+    }
+
+    /**
+     * Handle send sticker
+     */
+    private async handleSendSticker(socket: ExtendedSocket, data: any): Promise<void> {
+        const contextInfo = this.buildContextInfoFromPayload(data?.message || data, data?.message?.phone || data?.phone || '');
+        const normalizedData = data?.message
+            ? {
+                ...data,
+                message: {
+                    ...data.message,
+                    messageType: 'sticker' as const,
+                    ...(contextInfo ? { contextInfo } : {}),
+                },
+                stickerData: data.stickerData || data.sticker,
+                filename: sanitizeFilename(data.filename || `sticker_${Date.now()}.webp`) || `sticker_${Date.now()}.webp`,
+            }
+            : {
+                message: {
+                    id: data?.id,
+                    chatId: data?.chatId,
+                    phone: data?.phone,
+                    message: data?.message || '[Sticker]',
+                    messageType: 'sticker' as const,
+                    replyToMessageId: data?.replyToId,
+                    isFromMe: true,
+                    ...(contextInfo ? { contextInfo } : {}),
+                },
+                stickerData: data?.stickerData || data?.sticker,
+                filename: sanitizeFilename(data?.filename || `sticker_${Date.now()}.webp`) || `sticker_${Date.now()}.webp`,
+            };
+
+        const validated = validateInput(stickerUploadSchema, normalizedData);
+        const sanitizedFilename = sanitizeFilename(validated.filename || `sticker_${Date.now()}.webp`);
+        const tempPath = path.join(CONFIG.PATHS.IMAGES, sanitizedFilename);
+
+        try {
+            const buffer = Buffer.from(validated.stickerData, 'base64');
+            if (!fs.existsSync(CONFIG.PATHS.IMAGES)) {
+                fs.mkdirSync(CONFIG.PATHS.IMAGES, { recursive: true });
+            }
+            fs.writeFileSync(tempPath, buffer);
+
+            const mockFile = {
+                path: tempPath,
+                filename: sanitizedFilename,
+                mimetype: 'image/webp',
+            };
+
+            const currentUser = {
+                id: socket.userId || 'unknown',
+                username: socket.userId || 'unknown',
+            };
+
+            const messageForSend = {
+                ...validated.message,
+                ...(contextInfo ? { contextInfo } : {}),
+            };
+
+            const result = await this.messageSender.sendSticker(messageForSend, mockFile, currentUser);
+
+            if (!result.success) {
+                socket.emit('message_error', {
+                    success: false,
+                    error: result.error || 'Failed to send sticker',
+                    originalMessage: validated.message,
+                });
+                return;
+            }
+
+            socket.emit('message_sent', {
+                success: true,
+                messageId: result.messageId,
+                originalMessage: validated.message,
+            });
+        } catch (error) {
+            if (fs.existsSync(tempPath)) {
+                fs.unlinkSync(tempPath);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Handle send location
+     */
+    private async handleSendLocation(socket: ExtendedSocket, data: any): Promise<void> {
+        const contextInfo = this.buildContextInfoFromPayload(data?.message || data, data?.message?.phone || data?.phone || '');
+        const normalizedData = {
+            message: {
+                id: data?.id || data?.message?.id,
+                chatId: data?.chatId || data?.message?.chatId,
+                phone: data?.phone || data?.message?.phone,
+                message: data?.messageText || data?.message?.message || '',
+                messageType: 'location' as const,
+                replyToMessageId: data?.replyToId || data?.message?.replyToMessageId,
+                isFromMe: true,
+                ...(contextInfo ? { contextInfo } : {}),
+            },
+            latitude: data?.latitude,
+            longitude: data?.longitude,
+            name: data?.name,
+            address: data?.address,
+        };
+
+        const validated = validateInput(locationMessageSchema, normalizedData);
+        const currentUser = {
+            id: socket.userId || 'unknown',
+            username: socket.userId || 'unknown',
+        };
+
+        const result = await this.messageSender.sendLocation(
+            {
+                ...validated.message,
+                latitude: validated.latitude,
+                longitude: validated.longitude,
+                locationName: validated.name,
+                locationAddress: validated.address,
+            },
+            currentUser
+        );
+
+        if (!result.success) {
+            socket.emit('message_error', {
+                success: false,
+                error: result.error || 'Failed to send location',
+                originalMessage: validated.message,
+            });
+            return;
+        }
+
+        socket.emit('message_sent', {
+            success: true,
+            messageId: result.messageId,
+            originalMessage: validated.message,
+        });
+    }
+
+    /**
+     * Handle send contact
+     */
+    private async handleSendContact(socket: ExtendedSocket, data: any): Promise<void> {
+        const contextInfo = this.buildContextInfoFromPayload(data?.message || data, data?.message?.phone || data?.phone || '');
+        const normalizedData = {
+            message: {
+                id: data?.id || data?.message?.id,
+                chatId: data?.chatId || data?.message?.chatId,
+                phone: data?.phone || data?.message?.phone,
+                message: data?.messageText || data?.message?.message || '',
+                messageType: 'contact' as const,
+                replyToMessageId: data?.replyToId || data?.message?.replyToMessageId,
+                isFromMe: true,
+                ...(contextInfo ? { contextInfo } : {}),
+            },
+            contactName: data?.contactName || data?.name,
+            vcard: data?.vcard,
+        };
+
+        const validated = validateInput(contactMessageSchema, normalizedData);
+        const currentUser = {
+            id: socket.userId || 'unknown',
+            username: socket.userId || 'unknown',
+        };
+
+        const result = await this.messageSender.sendContact(
+            {
+                ...validated.message,
+                contactName: validated.contactName,
+                vcard: validated.vcard,
+            },
+            currentUser
+        );
+
+        if (!result.success) {
+            socket.emit('message_error', {
+                success: false,
+                error: result.error || 'Failed to send contact',
+                originalMessage: validated.message,
+            });
+            return;
+        }
+
+        socket.emit('message_sent', {
+            success: true,
+            messageId: result.messageId,
+            originalMessage: validated.message,
+        });
+    }
+
+    /**
+     * Handle send poll
+     */
+    private async handleSendPoll(socket: ExtendedSocket, data: any): Promise<void> {
+        const contextInfo = this.buildContextInfoFromPayload(data?.message || data, data?.message?.phone || data?.phone || '');
+        const normalizedData = {
+            message: {
+                id: data?.id || data?.message?.id,
+                chatId: data?.chatId || data?.message?.chatId,
+                phone: data?.phone || data?.message?.phone,
+                message: data?.messageText || data?.message?.message || '',
+                messageType: 'poll' as const,
+                replyToMessageId: data?.replyToId || data?.message?.replyToMessageId,
+                isFromMe: true,
+                ...(contextInfo ? { contextInfo } : {}),
+            },
+            pollName: data?.pollName || data?.name,
+            options: data?.options,
+            selectableCount: data?.selectableCount,
+        };
+
+        const validated = validateInput(pollMessageSchema, normalizedData);
+        const currentUser = {
+            id: socket.userId || 'unknown',
+            username: socket.userId || 'unknown',
+        };
+
+        const result = await this.messageSender.sendPoll(
+            {
+                ...validated.message,
+                pollName: validated.pollName,
+                pollOptions: validated.options,
+                pollSelectableCount: validated.selectableCount,
+            },
+            currentUser
+        );
+
+        if (!result.success) {
+            socket.emit('message_error', {
+                success: false,
+                error: result.error || 'Failed to send poll',
+                originalMessage: validated.message,
+            });
+            return;
+        }
+
+        socket.emit('message_sent', {
+            success: true,
+            messageId: result.messageId,
+            originalMessage: validated.message,
+        });
     }
 
     /**
@@ -723,6 +972,8 @@ export class SocketHandler {
                 result = await this.messageSender.sendVideo(forwardedMessage, mockFile, currentUser);
             } else if (forwardedMessage.messageType === 'audio') {
                 result = await this.messageSender.sendAudio(forwardedMessage, mockFile, currentUser);
+            } else if (forwardedMessage.messageType === 'sticker') {
+                result = await this.messageSender.sendSticker(forwardedMessage, mockFile, currentUser);
             } else {
                 result = await this.messageSender.sendDocument(forwardedMessage, mockFile, currentUser);
             }

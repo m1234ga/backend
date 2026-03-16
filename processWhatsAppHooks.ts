@@ -169,7 +169,11 @@ class ProcessWhatsAppHooks implements HooksType {
         message.imageMessage?.contextInfo ||
         message.videoMessage?.contextInfo ||
         message.audioMessage?.contextInfo ||
-        message.documentMessage?.contextInfo;
+        message.documentMessage?.contextInfo ||
+        message.stickerMessage?.contextInfo ||
+        message.locationMessage?.contextInfo ||
+        message.contactMessage?.contextInfo ||
+        message.pollMessage?.contextInfo;
 
       if (contextInfo && (contextInfo.stanzaId||contextInfo.stanzaID) ) {
         replyToMessageId = contextInfo.stanzaId||contextInfo.stanzaID;
@@ -201,6 +205,26 @@ class ProcessWhatsAppHooks implements HooksType {
         messageType = 'sticker';
         content = '[Sticker]';
         mediaPath = await this.handleMediaDownload(message.stickerMessage, 'sticker', messageId);
+      } else if (message.locationMessage) {
+        messageType = 'location';
+        const locMsg = message.locationMessage;
+        const lat = locMsg.degreesLatitude ?? locMsg.latitude ?? 0;
+        const lng = locMsg.degreesLongitude ?? locMsg.longitude ?? 0;
+        const name = locMsg.name || '';
+        content = `[Location] ${lat.toFixed(4)},${lng.toFixed(4)}${name ? ` (${name})` : ''}`;
+      } else if (message.contactMessage) {
+        messageType = 'contact';
+        const contactMsg = message.contactMessage;
+        const displayName = contactMsg.displayName || 'Contact';
+        const rawVcard = contactMsg.vcard || contactMsg.Vcard || '';
+        const telMatch = String(rawVcard).match(/TEL[^:]*:([^\r\n]+)/i);
+        const contactPhone = telMatch ? telMatch[1].replace(/[\s-]/g, '').trim() : '';
+        content = `[Contact] ${displayName}${contactPhone ? `|${contactPhone}` : ''}`;
+      } else if (message.pollMessage) {
+        messageType = 'poll';
+        const pollMsg = message.pollMessage;
+        const pollName = pollMsg.name || 'Poll';
+        content = `[Poll] ${pollName}`;
       }
 
       // 3. Upsert Chat
@@ -598,7 +622,9 @@ class ProcessWhatsAppHooks implements HooksType {
           if (!coreMessage || (!coreMessage.conversation && !coreMessage.extendedTextMessage &&
             !coreMessage.imageMessage && !coreMessage.videoMessage &&
             !coreMessage.audioMessage && !coreMessage.documentMessage &&
-            !coreMessage.stickerMessage && !coreMessage.reactionMessage)) {
+            !coreMessage.stickerMessage && !coreMessage.locationMessage &&
+            !coreMessage.contactMessage && !coreMessage.pollMessage &&
+            !coreMessage.reactionMessage)) {
             continue;
           }
 
@@ -684,6 +710,13 @@ class ProcessWhatsAppHooks implements HooksType {
     if (content.videoMessage) return "[Video]";
     if (content.audioMessage) return "[Audio]";
     if (content.stickerMessage) return "[Sticker]";
+    if (content.locationMessage) {
+      const lat = content.locationMessage.degreesLatitude ?? content.locationMessage.latitude;
+      const lng = content.locationMessage.degreesLongitude ?? content.locationMessage.longitude;
+      return typeof lat === 'number' && typeof lng === 'number' ? `[Location] ${lat},${lng}` : "[Location]";
+    }
+    if (content.contactMessage) return `[Contact] ${content.contactMessage.displayName || 'Contact'}`;
+    if (content.pollMessage) return `[Poll] ${content.pollMessage.name || 'Poll'}`;
     if (content.documentMessage) return `[Document] ${content.documentMessage.fileName || 'File'}`;
     return "";
   }

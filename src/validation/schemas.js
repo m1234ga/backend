@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.assignTagSchema = exports.tagSchema = exports.paginationSchema = exports.forwardMessageSchema = exports.typingDataSchema = exports.documentUploadSchema = exports.audioUploadSchema = exports.videoUploadSchema = exports.imageUploadSchema = exports.chatMessageSchema = void 0;
+exports.assignTagSchema = exports.tagSchema = exports.paginationSchema = exports.forwardMessageSchema = exports.typingDataSchema = exports.pollMessageSchema = exports.contactMessageSchema = exports.locationMessageSchema = exports.stickerUploadSchema = exports.documentUploadSchema = exports.audioUploadSchema = exports.videoUploadSchema = exports.imageUploadSchema = exports.chatMessageSchema = void 0;
 exports.validateInput = validateInput;
 exports.sanitizeFilename = sanitizeFilename;
 exports.sanitizeChatId = sanitizeChatId;
@@ -40,7 +40,7 @@ exports.chatMessageSchema = zod_1.z.object({
     chatId: chatIdSchema,
     phone: phoneSchema,
     message: messageContentSchema.optional(),
-    messageType: zod_1.z.enum(['text', 'image', 'video', 'audio', 'document', 'sticker']).default('text'),
+    messageType: zod_1.z.enum(['text', 'image', 'video', 'audio', 'document', 'sticker', 'location', 'contact', 'poll']).default('text'),
     timestamp: zod_1.z.union([zod_1.z.date(), zod_1.z.string().datetime()]).optional(),
     timeStamp: zod_1.z.union([zod_1.z.date(), zod_1.z.string().datetime()]).optional(),
     ContactId: zod_1.z.string().optional(),
@@ -90,6 +90,33 @@ exports.documentUploadSchema = zod_1.z.object({
     documentData: zod_1.z.string().min(1), // Base64
     filename: filenameSchema,
     mimetype: zod_1.z.string().max(100),
+});
+// Sticker upload schema
+exports.stickerUploadSchema = zod_1.z.object({
+    message: exports.chatMessageSchema,
+    stickerData: zod_1.z.string().min(1),
+    filename: filenameSchema.optional(),
+});
+// Location message schema
+exports.locationMessageSchema = zod_1.z.object({
+    message: exports.chatMessageSchema,
+    latitude: zod_1.z.number().min(-90).max(90),
+    longitude: zod_1.z.number().min(-180).max(180),
+    name: zod_1.z.string().max(200).optional(),
+    address: zod_1.z.string().max(500).optional(),
+});
+// Contact message schema
+exports.contactMessageSchema = zod_1.z.object({
+    message: exports.chatMessageSchema,
+    contactName: zod_1.z.string().min(1).max(100),
+    vcard: zod_1.z.string().min(1).max(20000),
+});
+// Poll message schema
+exports.pollMessageSchema = zod_1.z.object({
+    message: exports.chatMessageSchema,
+    pollName: zod_1.z.string().min(1).max(200),
+    options: zod_1.z.array(zod_1.z.string().min(1).max(200)).min(2).max(12),
+    selectableCount: zod_1.z.number().int().min(1).max(12).optional(),
 });
 // Typing indicator schema
 exports.typingDataSchema = zod_1.z.object({

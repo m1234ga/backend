@@ -44,7 +44,7 @@ export const chatMessageSchema = z.object({
     chatId: chatIdSchema,
     phone: phoneSchema,
     message: messageContentSchema.optional(),
-    messageType: z.enum(['text', 'image', 'video', 'audio', 'document', 'sticker']).default('text'),
+    messageType: z.enum(['text', 'image', 'video', 'audio', 'document', 'sticker', 'location', 'contact', 'poll']).default('text'),
     timestamp: z.union([z.date(), z.string().datetime()]).optional(),
     timeStamp: z.union([z.date(), z.string().datetime()]).optional(),
     ContactId: z.string().optional(),
@@ -98,6 +98,37 @@ export const documentUploadSchema = z.object({
     documentData: z.string().min(1), // Base64
     filename: filenameSchema,
     mimetype: z.string().max(100),
+});
+
+// Sticker upload schema
+export const stickerUploadSchema = z.object({
+    message: chatMessageSchema,
+    stickerData: z.string().min(1),
+    filename: filenameSchema.optional(),
+});
+
+// Location message schema
+export const locationMessageSchema = z.object({
+    message: chatMessageSchema,
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    name: z.string().max(200).optional(),
+    address: z.string().max(500).optional(),
+});
+
+// Contact message schema
+export const contactMessageSchema = z.object({
+    message: chatMessageSchema,
+    contactName: z.string().min(1).max(100),
+    vcard: z.string().min(1).max(20000),
+});
+
+// Poll message schema
+export const pollMessageSchema = z.object({
+    message: chatMessageSchema,
+    pollName: z.string().min(1).max(200),
+    options: z.array(z.string().min(1).max(200)).min(2).max(12),
+    selectableCount: z.number().int().min(1).max(12).optional(),
 });
 
 // Typing indicator schema

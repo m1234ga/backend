@@ -432,6 +432,176 @@ class MessageSenderService {
         }
     }
     /**
+     * Send sticker message
+     */
+    async sendSticker(message, stickerFile, currentUser) {
+        try {
+            logger.debug('Sending sticker message', { chatId: message.chatId, filename: stickerFile.filename });
+            if (!message.phone || !stickerFile) {
+                return { success: false, error: 'Phone and sticker file are required' };
+            }
+            const { lid: contactLid } = await this.retrieveLidFromWuzAPI(message.phone);
+            const isGroup = message.chatId.includes('@g.us');
+            if (contactLid && !isGroup && message.phone.replace(/[^0-9]/g, '') === message.chatId.replace(/[^0-9]/g, '')) {
+                message = { ...message, chatId: contactLid };
+            }
+            const stickerBuffer = fs_1.default.readFileSync(stickerFile.path);
+            const base64Sticker = stickerBuffer.toString('base64');
+            const messageId = (0, uuid_1.v4)();
+            const contextInfo = this.buildContext(message);
+            const result = await WhatsAppApiService_1.whatsAppApiService.sendStickerMessage(message.phone, base64Sticker, messageId, contextInfo);
+            if (!result.success) {
+                this.cleanupFile(stickerFile.path);
+                return { success: false, error: result.error, details: result.details };
+            }
+            const timestamp = this.resolveTimestamp(result.data?.data);
+            const mediaPath = `imgs/${stickerFile.filename}`;
+            const updatedChat = await this.updateChat(message, '[Sticker]', timestamp, currentUser?.id);
+            const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.STICKER, '[Sticker]', timestamp, mediaPath, currentUser?.id);
+            const io = SocketHandler_1.socketHandler.getIO();
+            if (io) {
+                io.emit(constants_1.SOCKET_EVENTS.NEW_MESSAGE, {
+                    ...savedMessage,
+                    tempId: message.id,
+                    pushName: message.pushName,
+                });
+                if (updatedChat && updatedChat.length > 0) {
+                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                }
+            }
+            return { success: true, messageId };
+        }
+        catch (error) {
+            logger.error('Failed to send sticker message', error, { chatId: message.chatId });
+            this.cleanupFile(stickerFile?.path);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Internal server error',
+            };
+        }
+    }
+    /**
+     * Send location message
+     */
+    async sendLocation(message, currentUser) {
+        try {
+            if (!message.phone || typeof message.latitude !== 'number' || typeof message.longitude !== 'number') {
+                return { success: false, error: 'Phone, latitude, and longitude are required' };
+            }
+            const messageId = (0, uuid_1.v4)();
+            const contextInfo = this.buildContext(message);
+            const result = await WhatsAppApiService_1.whatsAppApiService.sendLocationMessage(message.phone, message.latitude, message.longitude, messageId, message.locationName, message.locationAddress, contextInfo);
+            if (!result.success) {
+                return { success: false, error: result.error, details: result.details };
+            }
+            const timestamp = this.resolveTimestamp(result.data?.data);
+            // Always persist coordinates so the UI can open map links from history/sync messages.
+            const content = `[Location] ${message.latitude.toFixed(6)},${message.longitude.toFixed(6)}${message.locationName ? ` (${message.locationName})` : ''}`;
+            const updatedChat = await this.updateChat(message, content, timestamp, currentUser?.id);
+            const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.LOCATION, content, timestamp, undefined, currentUser?.id);
+            const io = SocketHandler_1.socketHandler.getIO();
+            if (io) {
+                io.emit(constants_1.SOCKET_EVENTS.NEW_MESSAGE, {
+                    ...savedMessage,
+                    tempId: message.id,
+                    pushName: message.pushName,
+                });
+                if (updatedChat && updatedChat.length > 0) {
+                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                }
+            }
+            return { success: true, messageId };
+        }
+        catch (error) {
+            logger.error('Failed to send location message', error, { chatId: message.chatId });
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Internal server error',
+            };
+        }
+    }
+    /**
+     * Send contact message
+     */
+    async sendContact(message, currentUser) {
+        try {
+            if (!message.phone || !message.contactName || !message.vcard) {
+                return { success: false, error: 'Phone, contact name, and vcard are required' };
+            }
+            const messageId = (0, uuid_1.v4)();
+            const contextInfo = this.buildContext(message);
+            const result = await WhatsAppApiService_1.whatsAppApiService.sendContactMessage(message.phone, message.contactName, message.vcard, messageId, contextInfo);
+            if (!result.success) {
+                return { success: false, error: result.error, details: result.details };
+            }
+            const timestamp = this.resolveTimestamp(result.data?.data);
+            const vcardPhoneMatch = String(message.vcard || '').match(/TEL[^:]*:([^\r\n]+)/i);
+            const parsedPhone = vcardPhoneMatch ? vcardPhoneMatch[1].replace(/[\s-]/g, '').trim() : '';
+            // Persist contact phone in a parseable format so UI can open call/details from stored history.
+            const content = `[Contact] ${message.contactName}${parsedPhone ? `|${parsedPhone}` : ''}`;
+            const updatedChat = await this.updateChat(message, content, timestamp, currentUser?.id);
+            const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.CONTACT, content, timestamp, undefined, currentUser?.id);
+            const io = SocketHandler_1.socketHandler.getIO();
+            if (io) {
+                io.emit(constants_1.SOCKET_EVENTS.NEW_MESSAGE, {
+                    ...savedMessage,
+                    tempId: message.id,
+                    pushName: message.pushName,
+                });
+                if (updatedChat && updatedChat.length > 0) {
+                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                }
+            }
+            return { success: true, messageId };
+        }
+        catch (error) {
+            logger.error('Failed to send contact message', error, { chatId: message.chatId });
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Internal server error',
+            };
+        }
+    }
+    /**
+     * Send poll message
+     */
+    async sendPoll(message, currentUser) {
+        try {
+            if (!message.phone || !message.pollName || !Array.isArray(message.pollOptions) || message.pollOptions.length < 2) {
+                return { success: false, error: 'Phone, poll name, and at least two options are required' };
+            }
+            const messageId = (0, uuid_1.v4)();
+            const contextInfo = this.buildContext(message);
+            const result = await WhatsAppApiService_1.whatsAppApiService.sendPollMessage(message.phone, message.pollName, message.pollOptions, messageId, message.pollSelectableCount || 1, contextInfo);
+            if (!result.success) {
+                return { success: false, error: result.error, details: result.details };
+            }
+            const timestamp = this.resolveTimestamp(result.data?.data);
+            const content = message.message || `[Poll] ${message.pollName}`;
+            const updatedChat = await this.updateChat(message, content, timestamp, currentUser?.id);
+            const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.POLL, content, timestamp, undefined, currentUser?.id);
+            const io = SocketHandler_1.socketHandler.getIO();
+            if (io) {
+                io.emit(constants_1.SOCKET_EVENTS.NEW_MESSAGE, {
+                    ...savedMessage,
+                    tempId: message.id,
+                    pushName: message.pushName,
+                });
+                if (updatedChat && updatedChat.length > 0) {
+                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                }
+            }
+            return { success: true, messageId };
+        }
+        catch (error) {
+            logger.error('Failed to send poll message', error, { chatId: message.chatId });
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Internal server error',
+            };
+        }
+    }
+    /**
      * Send reaction
      */
     async sendReaction(chatId, messageId, emoji) {

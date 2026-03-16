@@ -140,6 +140,61 @@ class WhatsAppApiService {
         });
     }
     /**
+     * Send sticker message
+     */
+    async sendStickerMessage(phone, stickerBase64, id, contextInfo, metadata) {
+        return this.request('chat/send/sticker', 'POST', {
+            Phone: phone,
+            Sticker: stickerBase64.startsWith('data:') ? stickerBase64 : `data:image/webp;base64,${stickerBase64}`,
+            Id: id,
+            ContextInfo: contextInfo,
+            PackId: metadata?.packId,
+            PackName: metadata?.packName,
+            PackPublisher: metadata?.packPublisher,
+            Emojis: metadata?.emojis,
+            PngThumbnail: metadata?.pngThumbnail,
+        });
+    }
+    /**
+     * Send location message
+     */
+    async sendLocationMessage(phone, latitude, longitude, id, name, address, contextInfo) {
+        return this.request('chat/send/location', 'POST', {
+            Phone: phone,
+            Latitude: latitude,
+            Longitude: longitude,
+            Name: name || '',
+            Address: address || '',
+            Id: id,
+            ContextInfo: contextInfo,
+        });
+    }
+    /**
+     * Send contact message
+     */
+    async sendContactMessage(phone, name, vcard, id, contextInfo) {
+        return this.request('chat/send/contact', 'POST', {
+            Phone: phone,
+            Name: name,
+            Vcard: vcard,
+            Id: id,
+            ContextInfo: contextInfo,
+        });
+    }
+    /**
+     * Send poll message
+     */
+    async sendPollMessage(phone, name, options, id, selectableCount = 1, contextInfo) {
+        return this.request('chat/send/poll', 'POST', {
+            Phone: phone,
+            Name: name,
+            Options: options,
+            SelectableCount: selectableCount,
+            Id: id,
+            ContextInfo: contextInfo,
+        });
+    }
+    /**
      * Send reaction
      */
     async sendReaction(phone, messageId, emoji) {

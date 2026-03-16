@@ -399,6 +399,202 @@ router.get('/api/settings/session/qr', async (_req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+// Settings: Group management proxies
+router.get('/api/settings/groups/list', async (req, res) => {
+    try {
+        const result = await callWuzForCurrentUser(req, 'group/list');
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error listing groups:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.get('/api/settings/groups/info', async (req, res) => {
+    try {
+        const groupJid = String(req.query.groupJid || '').trim();
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        // Wuz docs show GET with body; we use query params for compatibility with fetch/HTTP clients.
+        const encoded = encodeURIComponent(groupJid);
+        const result = await callWuzForCurrentUser(req, `group/info?groupjid=${encoded}&GroupJID=${encoded}`);
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error getting group info:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.get('/api/settings/groups/invite-link', async (req, res) => {
+    try {
+        const groupJid = String(req.query.groupJid || '').trim();
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        const encoded = encodeURIComponent(groupJid);
+        const result = await callWuzForCurrentUser(req, `group/invitelink?groupjid=${encoded}&GroupJID=${encoded}`);
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error getting group invite link:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/create', async (req, res) => {
+    try {
+        const name = String(req.body?.name || '').trim();
+        const participants = Array.isArray(req.body?.participants)
+            ? req.body.participants.map((value) => String(value || '').trim()).filter(Boolean)
+            : [];
+        if (!name)
+            return res.status(400).json({ error: 'name is required' });
+        if (participants.length === 0)
+            return res.status(400).json({ error: 'participants is required' });
+        const result = await callWuzForCurrentUser(req, 'group/create', 'POST', { name, participants });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error creating group:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/name', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.GroupJID || '').trim();
+        const name = String(req.body?.name || req.body?.Name || '').trim();
+        if (!groupJid || !name)
+            return res.status(400).json({ error: 'groupJid and name are required' });
+        const result = await callWuzForCurrentUser(req, 'group/name', 'POST', { GroupJID: groupJid, Name: name });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error setting group name:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/photo', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.GroupJID || '').trim();
+        const image = String(req.body?.image || req.body?.Image || '').trim();
+        if (!groupJid || !image)
+            return res.status(400).json({ error: 'groupJid and image are required' });
+        const result = await callWuzForCurrentUser(req, 'group/photo', 'POST', { GroupJID: groupJid, Image: image });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error setting group photo:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/photo/remove', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.groupjid || req.body?.GroupJID || '').trim();
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        const result = await callWuzForCurrentUser(req, 'group/photo/remove', 'POST', { groupjid: groupJid });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error removing group photo:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/locked', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.groupjid || '').trim();
+        const locked = Boolean(req.body?.locked);
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        const result = await callWuzForCurrentUser(req, 'group/locked', 'POST', { groupjid: groupJid, locked });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error setting group locked status:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/ephemeral', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.groupjid || '').trim();
+        const duration = String(req.body?.duration || '').trim();
+        if (!groupJid || !duration)
+            return res.status(400).json({ error: 'groupJid and duration are required' });
+        const result = await callWuzForCurrentUser(req, 'group/ephemeral', 'POST', { groupjid: groupJid, duration });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error setting group ephemeral timer:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/participants', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.groupjid || req.body?.GroupJID || '').trim();
+        const operationRaw = String(req.body?.operation || 'set').toLowerCase().trim();
+        const operation = operationRaw === 'add' || operationRaw === 'remove' ? operationRaw : 'set';
+        const participants = Array.isArray(req.body?.participants)
+            ? req.body.participants.map((value) => String(value || '').trim()).filter(Boolean)
+            : [];
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        if (participants.length === 0)
+            return res.status(400).json({ error: 'participants is required' });
+        // Upstream Wuz endpoint compatibility: send multiple key styles and operation hints.
+        const result = await callWuzForCurrentUser(req, 'group/participants', 'POST', {
+            GroupJID: groupJid,
+            groupjid: groupJid,
+            operation,
+            Operation: operation,
+            participants,
+            Participants: participants,
+            action: operation,
+            Action: operation,
+        });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error setting group participants:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+router.post('/api/settings/groups/delete', async (req, res) => {
+    try {
+        const groupJid = String(req.body?.groupJid || req.body?.groupjid || req.body?.GroupJID || '').trim();
+        if (!groupJid)
+            return res.status(400).json({ error: 'groupJid is required' });
+        // Upstream Wuz endpoint compatibility: send both key styles.
+        const result = await callWuzForCurrentUser(req, 'group/delete', 'POST', {
+            GroupJID: groupJid,
+            groupjid: groupJid,
+        });
+        if (!result.ok)
+            return res.status(502).json({ error: 'Wuz API error', details: result.data || result });
+        res.json(result.data);
+    }
+    catch (error) {
+        console.error('Error deleting group:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
 router.get('/api/settings/webhook', async (_req, res) => {
     try {
         const result = await callWuzForCurrentUser(_req, 'webhook');

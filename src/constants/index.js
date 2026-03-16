@@ -14,6 +14,9 @@ exports.MESSAGE_TYPES = {
     DOCUMENT: 'document',
     MEDIA: 'media',
     STICKER: 'sticker',
+    LOCATION: 'location',
+    CONTACT: 'contact',
+    POLL: 'poll',
 };
 // Chat Status
 exports.CHAT_STATUS = {
@@ -89,6 +92,10 @@ exports.SOCKET_EVENTS = {
     SEND_VIDEO: 'send_video',
     SEND_AUDIO: 'send_audio',
     SEND_DOCUMENT: 'send_document',
+    SEND_STICKER: 'send_sticker',
+    SEND_LOCATION: 'send_location',
+    SEND_CONTACT: 'send_contact',
+    SEND_POLL: 'send_poll',
     TYPING: 'typing',
     MESSAGE_FORWARDED: 'message_forwarded',
     CANCEL_RECORDING: 'cancel_recording',
