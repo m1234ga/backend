@@ -259,15 +259,28 @@ class ProcessWhatsAppHooks {
                     ...savedMessage,
                     pushName
                 });
-                // Emit minimal chat update
+                const dbChat = updatedChats?.[0];
+                const emittedPushName = dbChat?.pushname || pushName;
+                const emittedUnread = dbChat?.unReadCount ?? unreadValue ?? 0;
+                logger.debug('Emitting chat_updated', {
+                    chatId: dbChat?.id || chatId,
+                    unread: emittedUnread,
+                    pushName: emittedPushName,
+                    hasDbChat: Boolean(dbChat)
+                });
+                // Emit a richer chat payload so clients can upsert new chats and refresh names immediately.
                 io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, {
-                    id: chatId,
-                    lastMessage: content,
-                    lastMessageTime: timestamp,
-                    pushname: pushName,
-                    unread_count: unreadValue,
-                    unreadCount: unreadValue
-                    // other fields omitted, frontend likely patches existing or fetches full
+                    ...(dbChat || {}),
+                    id: dbChat?.id || chatId,
+                    name: dbChat?.name || emittedPushName || chatId,
+                    lastMessage: dbChat?.lastMessage || content,
+                    lastMessageTime: dbChat?.lastMessageTime || timestamp,
+                    phone: dbChat?.phone || phoneRaw || chatId,
+                    contactId: dbChat?.contactId || contactId || phoneRaw || chatId,
+                    pushname: emittedPushName,
+                    pushName: emittedPushName,
+                    unread_count: emittedUnread,
+                    unreadCount: emittedUnread,
                 });
             }
         }
