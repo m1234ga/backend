@@ -66,6 +66,7 @@ class SocketHandler {
             logger.info('User connected', { socketId: socket.id });
             // Register event handlers with rate limiting and validation
             this.registerHandler(socket, 'join', this.handleJoin.bind(this));
+            this.registerHandler(socket, 'alive', this.handleAlive.bind(this));
             this.registerHandler(socket, 'join_conversation', this.handleJoinConversation.bind(this));
             this.registerHandler(socket, 'leave_conversation', this.handleLeaveConversation.bind(this));
             this.registerHandler(socket, 'send_message', this.handleSendMessage.bind(this));
@@ -119,9 +120,26 @@ class SocketHandler {
         this.connectedUsers.set(userId, {
             socketId: socket.id,
             connectedAt: Date.now(),
+            lastAliveAt: Date.now(),
         });
         socket.userId = userId;
+        this.io?.emit('user_presence', { userId, isOnline: true, lastAliveAt: Date.now() });
         logger.info('User joined', { userId, socketId: socket.id });
+    }
+    /**
+     * Handle heartbeat from logged-in users.
+     */
+    async handleAlive(socket) {
+        if (!socket.userId)
+            return;
+        const existing = this.connectedUsers.get(socket.userId);
+        if (!existing)
+            return;
+        this.connectedUsers.set(socket.userId, {
+            ...existing,
+            socketId: socket.id,
+            lastAliveAt: Date.now(),
+        });
     }
     /**
      * Handle join conversation
@@ -534,6 +552,7 @@ class SocketHandler {
     handleDisconnect(socket) {
         if (socket.userId) {
             this.connectedUsers.delete(socket.userId);
+            this.io?.emit('user_presence', { userId: socket.userId, isOnline: false, lastAliveAt: Date.now() });
             logger.info('User disconnected', { userId: socket.userId, socketId: socket.id });
         }
     }
@@ -542,11 +561,12 @@ class SocketHandler {
      */
     cleanupStaleConnections() {
         const now = Date.now();
-        const staleThreshold = 30 * 60 * 1000; // 30 minutes
+        const staleThreshold = 10 * 60 * 1000; // 10 minutes
         for (const [userId, user] of this.connectedUsers.entries()) {
-            if (now - user.connectedAt > staleThreshold) {
+            if (now - user.lastAliveAt > staleThreshold) {
                 this.connectedUsers.delete(userId);
-                logger.debug('Cleaned up stale connection', { userId });
+                this.io?.emit('user_presence', { userId, isOnline: false, lastAliveAt: now });
+                logger.debug('Cleaned up stale connection', { userId, staleForMs: now - user.lastAliveAt });
             }
         }
     }
