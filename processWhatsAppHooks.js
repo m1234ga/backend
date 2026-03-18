@@ -205,6 +205,39 @@ class ProcessWhatsAppHooks {
                 const pollName = pollMsg.name || 'Poll';
                 content = `[Poll] ${pollName}`;
             }
+            // Reaction-only webhook: do not upsert chat/message content.
+            if (message.reactionMessage) {
+                try {
+                    const reaction = message.reactionMessage;
+                    const targetMessageId = reaction.key?.ID || reaction.key?.id;
+                    const reactionId = info.ID || info.id;
+                    const participant = (reaction.key?.remoteJID || reaction.key?.participant || info.Sender || info.Participant || "").split("@")[0];
+                    const emoji = reaction.text;
+                    const reactionTimestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp || Date.now());
+                    if (targetMessageId && reactionId && emoji) {
+                        await DatabaseService_1.databaseService.upsertReaction(reactionId, targetMessageId, participant, emoji, reactionTimestamp);
+                        const updatedReactions = await DatabaseService_1.databaseService.getMessageReactionsWithNames(targetMessageId);
+                        const reactionPayload = { chatId, messageId: targetMessageId, reactions: updatedReactions };
+                        const io = SocketHandler_1.socketHandler.getIO();
+                        // Webhook chatId can be a phone/LID variant; emit globally and to likely rooms.
+                        io?.emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
+                        if (chatId) {
+                            io?.to(`conversation_${chatId}`).emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
+                            const normalizedChatId = this.jidToPhone(String(chatId || ''));
+                            if (normalizedChatId && normalizedChatId !== chatId) {
+                                io?.to(`conversation_${normalizedChatId}`).emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
+                            }
+                        }
+                    }
+                }
+                catch (err) {
+                    // Ignore P2003 (FK error if message doesn't exist yet)
+                    if (err.code !== 'P2003') {
+                        logger.error('Error handling reaction', err);
+                    }
+                }
+                return;
+            }
             // 3. Upsert Chat
             const unreadCount = typeof info.unreadCount === "number" ? info.unreadCount : undefined;
             const updatedChats = await DatabaseService_1.databaseService.upsertChat(chatId, content, timestamp, unreadCount, true, // isOnline
@@ -229,30 +262,6 @@ class ProcessWhatsAppHooks {
                 userId: isFromMe ? 'Me' : undefined,
                 replyToMessageId
             });
-            // 5. Handle Reactions
-            if (message.reactionMessage) {
-                try {
-                    const reaction = message.reactionMessage;
-                    const targetMessageId = reaction.key?.ID || reaction.key?.id;
-                    const reactionId = info.ID || info.id;
-                    const participant = (reaction.key?.remoteJID || reaction.key?.participant || info.Sender || info.Participant || "").split("@")[0];
-                    const emoji = reaction.text;
-                    const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp || Date.now());
-                    if (targetMessageId && emoji) {
-                        await DatabaseService_1.databaseService.upsertReaction(reactionId, targetMessageId, participant, emoji, timestamp);
-                        // Emit update
-                        const updatedReactions = await DatabaseService_1.databaseService.getMessageReactionsWithNames(targetMessageId);
-                        SocketHandler_1.socketHandler.getIO()?.emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, { chatId, messageId: targetMessageId, reactions: updatedReactions });
-                    }
-                }
-                catch (err) {
-                    // Ignore P2003 (FK error if message doesn't exist yet)
-                    if (err.code !== 'P2003') {
-                        logger.error('Error handling reaction', err);
-                    }
-                }
-                return; // Reaction handled
-            }
             const unreadValue = updatedChats?.[0]?.unReadCount;
             // 6. Emit to Socket
             const io = SocketHandler_1.socketHandler.getIO();

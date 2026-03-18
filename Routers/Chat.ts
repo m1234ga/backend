@@ -1864,11 +1864,17 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
         where: { id: existingReaction.id }
       });
 
-      // Fetch updated reactions to emit
+      // Fetch updated reactions and emit to the chat room.
       const updatedReactions = await prisma.message_reactions.findMany({
         where: { messageId }
       });
-      socketHandler.getIO()?.emit('reaction_updated', { chatId: chatId || '', messageId, reactions: updatedReactions });
+      const reactionPayload = { chatId: chatId || '', messageId, reactions: updatedReactions };
+      const io = socketHandler.getIO();
+      if (chatId) {
+        io?.to(`conversation_${chatId}`).emit('reaction_updated', reactionPayload);
+      } else {
+        io?.emit('reaction_updated', reactionPayload);
+      }
 
       res.json({ success: true, message: 'Reaction removed', action: 'removed' });
     } else {
@@ -1887,11 +1893,17 @@ router.post('/api/AddReaction', async (req: Request, res: Response) => {
         }
       });
 
-      // Fetch updated reactions to emit
+      // Fetch updated reactions and emit to the chat room.
       const updatedReactions = await prisma.message_reactions.findMany({
         where: { messageId }
       });
-      socketHandler.getIO()?.emit('reaction_updated', { chatId: chatId || '', messageId, reactions: updatedReactions });
+      const reactionPayload = { chatId: chatId || '', messageId, reactions: updatedReactions };
+      const io = socketHandler.getIO();
+      if (chatId) {
+        io?.to(`conversation_${chatId}`).emit('reaction_updated', reactionPayload);
+      } else {
+        io?.emit('reaction_updated', reactionPayload);
+      }
 
       res.status(201).json({
         success: true,

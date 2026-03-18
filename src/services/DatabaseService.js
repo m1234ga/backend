@@ -281,21 +281,22 @@ class DatabaseService {
         }
     }
     /**
-     * Upsert reaction
+     * Replace participant reaction for a message with a fresh row.
      */
     async upsertReaction(id, messageId, participant, emoji, createdAt) {
         try {
             const normalizedCreatedAt = this.toDate(createdAt);
-            const result = await prismaClient_1.default.message_reactions.upsert({
-                where: { id },
-                update: { messageId, participant, emoji, createdAt: normalizedCreatedAt },
-                create: { id, messageId, participant, emoji, createdAt: normalizedCreatedAt },
+            await prismaClient_1.default.message_reactions.deleteMany({
+                where: { messageId, participant }
             });
-            logger.debug('Reaction upserted', { reactionId: id, messageId });
+            const result = await prismaClient_1.default.message_reactions.create({
+                data: { id, messageId, participant, emoji, createdAt: normalizedCreatedAt }
+            });
+            logger.debug('Reaction replaced by create', { reactionId: id, messageId, participant });
             return result;
         }
         catch (error) {
-            logger.error('Failed to upsert reaction', error, { reactionId: id, messageId });
+            logger.error('Failed to replace reaction', error, { reactionId: id, messageId, participant });
             throw error;
         }
     }
