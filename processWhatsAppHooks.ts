@@ -280,6 +280,10 @@ class ProcessWhatsAppHooks implements HooksType {
         const dbChat = updatedChats?.[0];
         const emittedPushName = dbChat?.pushname || pushName;
         const emittedUnread = dbChat?.unReadCount ?? unreadValue ?? 0;
+        const emittedPhone = this.jidToPhone(String(dbChat?.phone || phoneRaw || contactId || chatId || ''));
+        const emittedContactId = isGroup
+          ? this.jidToPhone(String(dbChat?.contactId || contactId || chatId || ''))
+          : this.jidToPhone(String(phoneRaw || dbChat?.phone || contactId || dbChat?.contactId || chatId || ''));
 
         logger.debug('Emitting chat_updated', {
           chatId: dbChat?.id || chatId,
@@ -295,8 +299,8 @@ class ProcessWhatsAppHooks implements HooksType {
           name: dbChat?.name || emittedPushName || chatId,
           lastMessage: dbChat?.lastMessage || content,
           lastMessageTime: dbChat?.lastMessageTime || timestamp,
-          phone: dbChat?.phone || phoneRaw || chatId,
-          contactId: dbChat?.contactId || contactId || phoneRaw || chatId,
+          phone: emittedPhone || chatId,
+          contactId: emittedContactId || chatId,
           pushname: emittedPushName,
           pushName: emittedPushName,
           unread_count: emittedUnread,
