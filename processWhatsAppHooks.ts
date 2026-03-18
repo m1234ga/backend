@@ -112,15 +112,7 @@ class ProcessWhatsAppHooks implements HooksType {
   /**
    * Unified message logic: Handles a single message from webhook or history sync
    */
-  private async processSingleMessage(
-    info: any,
-    message: any,
-    isLiveMessage: boolean = false,
-    options?: {
-      skipChatUpsert?: boolean;
-      upsertChatOptions?: Record<string, any>;
-    }
-  ): Promise<void> {
+  private async processSingleMessage(info: any, message: any, isLiveMessage: boolean = false): Promise<void> {
     try {
       // 0. Skip broadcast status messages
       if (info.Chat === "status@broadcast") {
@@ -216,30 +208,21 @@ class ProcessWhatsAppHooks implements HooksType {
         content = `[Poll] ${pollName}`;
       }
 
-      // 3. Upsert Chat (optional for history replay to avoid repeated upserts)
+      // 3. Upsert Chat
       const unreadCount = typeof info.unreadCount === "number" ? info.unreadCount : undefined;
-      const shouldUpsertChat = options?.skipChatUpsert !== true;
-      const upsertOptions = {
-        incrementUnreadOnIncoming: isLiveMessage,
-        callerFunctionName: 'processSingleMessage',
-        ...(options?.upsertChatOptions || {})
-      };
-
-      const updatedChats = shouldUpsertChat
-        ? await databaseService.upsertChat(
-          chatId,
-          content,
-          timestamp,
-          unreadCount,
-          true, // isOnline
-          false, // isTyping
-          pushName,
-          contactId,
-          this.userJid,
-          upsertOptions,
-          isFromMe
-        )
-        : undefined;
+      const updatedChats = await databaseService.upsertChat(
+        chatId,
+        content,
+        timestamp,
+        unreadCount,
+        true, // isOnline
+        false, // isTyping
+        pushName,
+        contactId,
+        this.userJid,
+        { incrementUnreadOnIncoming: isLiveMessage, callerFunctionName: 'processSingleMessage' }, // options
+        isFromMe
+      );
 
       // 4. Upsert Message
       const messageContactId = isFromMe
@@ -613,13 +596,28 @@ private async resolveAndStoreContact(phone: string, pushName: string, chatId: st
         }
       }
 
-      // 3. Process individual messages (upsert chat only on first valid message)
+      // 3. Upsert Chat (Parity with old ChatupsertHelper)
+      if (unreadCount >= 0) {
+        await databaseService.upsertChat(
+          conversationId,
+          lastMessagePreview || "",
+          conversationTimestamp,
+          unreadCount,
+          false, // isOnline
+          false, // isTyping
+          pushName,
+          id, // original contactId
+          this.userJid,
+          { participants, callerFunctionName: 'processConversation' },
+          id.includes('@s.whatsapp.net') && con.messages?.[0]?.message?.key?.fromMe // approximate isFromMe
+        );
+      }
+
+      // 4. Process individual messages
       if (Array.isArray(con.messages) && con.messages.length > 0) {
         const sortedMessages = [...con.messages].sort((a: any, b: any) =>
           Number(b.msgOrderID || 0) - Number(a.msgOrderID || 0)
         );
-
-        let hasUpsertedChatForConversation = false;
 
         for (const msg of sortedMessages) {
           const messageWrapper = msg.message;
@@ -669,35 +667,7 @@ private async resolveAndStoreContact(phone: string, pushName: string, chatId: st
             continue;
           }
 
-          const shouldUpsertOnThisMessage = !hasUpsertedChatForConversation;
-
-          await this.processSingleMessage(info, coreMessage, false, {
-            skipChatUpsert: !shouldUpsertOnThisMessage,
-            upsertChatOptions: shouldUpsertOnThisMessage
-              ? { participants, callerFunctionName: 'processConversation:firstMessage' }
-              : undefined
-          });
-
-          if (shouldUpsertOnThisMessage) {
-            hasUpsertedChatForConversation = true;
-          }
-        }
-
-        // Fallback: if no valid message was processed, still ensure chat exists.
-        if (!hasUpsertedChatForConversation && unreadCount >= 0) {
-          await databaseService.upsertChat(
-            conversationId,
-            lastMessagePreview || "",
-            conversationTimestamp,
-            unreadCount,
-            false, // isOnline
-            false, // isTyping
-            pushName,
-            id, // original contactId
-            this.userJid,
-            { participants, callerFunctionName: 'processConversation:fallback' },
-            id.includes('@s.whatsapp.net') && con.messages?.[0]?.message?.key?.fromMe // approximate isFromMe
-          );
+          await this.processSingleMessage(info, coreMessage);
         }
       }
     } catch (err) {
