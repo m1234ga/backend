@@ -122,10 +122,10 @@ class ProcessWhatsAppHooks implements HooksType {
       // 0b. Determine IDs and names using specialized logic
       const { chatId, phoneRaw, pushName } = await this.getChatId(info);
 
-
-
       // 1. Determine basic info (Mirrors old implementation)
-      const messageId = info.ID;
+      // For reaction webhooks, messageId must point to the reacted message.
+      const reactionTargetMessageId = message?.reactionMessage?.key?.ID || message?.reactionMessage?.key?.id;
+      const messageId = reactionTargetMessageId || info.ID || info.id;
       const isFromMe = info.IsFromMe || false;
       const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp);
       const isGroup = (info.Chat || "").includes("@g.us");
@@ -247,7 +247,7 @@ class ProcessWhatsAppHooks implements HooksType {
         try {
           const reaction = message.reactionMessage;
           const targetMessageId = reaction.key?.ID || reaction.key?.id;
-          const reactionId = info.ID;
+          const reactionId = info.ID || info.id;
           const participant = (reaction.key?.remoteJID || reaction.key?.participant || info.Sender || info.Participant || "").split("@")[0];
           const emoji = reaction.text;
           const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp || Date.now());
