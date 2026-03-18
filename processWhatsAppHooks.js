@@ -106,7 +106,7 @@ class ProcessWhatsAppHooks {
     /**
      * Unified message logic: Handles a single message from webhook or history sync
      */
-    async processSingleMessage(info, message, isLiveMessage = false) {
+    async processSingleMessage(info, message, isLiveMessage = false, options) {
         try {
             // 0. Skip broadcast status messages
             if (info.Chat === "status@broadcast") {
@@ -203,12 +203,19 @@ class ProcessWhatsAppHooks {
                 const pollName = pollMsg.name || 'Poll';
                 content = `[Poll] ${pollName}`;
             }
-            // 3. Upsert Chat
+            // 3. Upsert Chat (optional for history replay to avoid repeated upserts)
             const unreadCount = typeof info.unreadCount === "number" ? info.unreadCount : undefined;
-            const updatedChats = await DatabaseService_1.databaseService.upsertChat(chatId, content, timestamp, unreadCount, true, // isOnline
-            false, // isTyping
-            pushName, contactId, this.userJid, { incrementUnreadOnIncoming: isLiveMessage, callerFunctionName: 'processSingleMessage' }, // options
-            isFromMe);
+            const shouldUpsertChat = options?.skipChatUpsert !== true;
+            const upsertOptions = {
+                incrementUnreadOnIncoming: isLiveMessage,
+                callerFunctionName: 'processSingleMessage',
+                ...(options?.upsertChatOptions || {})
+            };
+            const updatedChats = shouldUpsertChat
+                ? await DatabaseService_1.databaseService.upsertChat(chatId, content, timestamp, unreadCount, true, // isOnline
+                false, // isTyping
+                pushName, contactId, this.userJid, upsertOptions, isFromMe)
+                : undefined;
             // 4. Upsert Message
             const messageContactId = isFromMe
                 ? (cachedUserJid || this.userJid || 'Me')
@@ -311,15 +318,15 @@ class ProcessWhatsAppHooks {
             info.Sender = phoneRaw;
         if (pushName)
             info.PushName = pushName;
+        const chatId = isGroup
+            ? source?.match(/^[^@:]+/)?.[0] || ""
+            : this.sanitizeLid(source || phoneRaw);
         const phone = phoneRaw.includes("@s.whatsapp.net")
             ? this.jidToPhone(phoneRaw)
             : "";
         if (phone) {
-            pushName = await this.resolveAndStoreContact(phone, pushName);
+            pushName = await this.resolveAndStoreContact(phone, pushName, chatId);
         }
-        const chatId = isGroup
-            ? source?.match(/^[^@:]+/)?.[0] || ""
-            : this.sanitizeLid(source || phoneRaw);
         phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
         return { chatId, phoneRaw, pushName };
     }
@@ -375,7 +382,7 @@ class ProcessWhatsAppHooks {
         }
         return { source, phoneRaw };
     }
-    async resolveAndStoreContact(phone, pushName) {
+    async resolveAndStoreContact(phone, pushName, chatId) {
         const resolved = await DatabaseService_1.databaseService.resolveContactName(phone);
         if (resolved?.displayName) {
             pushName = resolved.displayName;
@@ -384,7 +391,7 @@ class ProcessWhatsAppHooks {
             pushName = phone;
         }
         await DatabaseService_1.databaseService.upsertLidMapping({
-            lid: phone,
+            lid: chatId || phone,
             phone,
             pushName,
             fullName: null,
@@ -542,17 +549,10 @@ class ProcessWhatsAppHooks {
                     });
                 }
             }
-            // 3. Upsert Chat (Parity with old ChatupsertHelper)
-            if (unreadCount >= 0) {
-                await DatabaseService_1.databaseService.upsertChat(conversationId, lastMessagePreview || "", conversationTimestamp, unreadCount, false, // isOnline
-                false, // isTyping
-                pushName, id, // original contactId
-                this.userJid, { participants, callerFunctionName: 'processConversation' }, id.includes('@s.whatsapp.net') && con.messages?.[0]?.message?.key?.fromMe // approximate isFromMe
-                );
-            }
-            // 4. Process individual messages
+            // 3. Process individual messages (upsert chat only on first valid message)
             if (Array.isArray(con.messages) && con.messages.length > 0) {
                 const sortedMessages = [...con.messages].sort((a, b) => Number(b.msgOrderID || 0) - Number(a.msgOrderID || 0));
+                let hasUpsertedChatForConversation = false;
                 for (const msg of sortedMessages) {
                     const messageWrapper = msg.message;
                     const key = messageWrapper?.key;
@@ -598,7 +598,24 @@ class ProcessWhatsAppHooks {
                         !coreMessage.reactionMessage)) {
                         continue;
                     }
-                    await this.processSingleMessage(info, coreMessage);
+                    const shouldUpsertOnThisMessage = !hasUpsertedChatForConversation;
+                    await this.processSingleMessage(info, coreMessage, false, {
+                        skipChatUpsert: !shouldUpsertOnThisMessage,
+                        upsertChatOptions: shouldUpsertOnThisMessage
+                            ? { participants, callerFunctionName: 'processConversation:firstMessage' }
+                            : undefined
+                    });
+                    if (shouldUpsertOnThisMessage) {
+                        hasUpsertedChatForConversation = true;
+                    }
+                }
+                // Fallback: if no valid message was processed, still ensure chat exists.
+                if (!hasUpsertedChatForConversation && unreadCount >= 0) {
+                    await DatabaseService_1.databaseService.upsertChat(conversationId, lastMessagePreview || "", conversationTimestamp, unreadCount, false, // isOnline
+                    false, // isTyping
+                    pushName, id, // original contactId
+                    this.userJid, { participants, callerFunctionName: 'processConversation:fallback' }, id.includes('@s.whatsapp.net') && con.messages?.[0]?.message?.key?.fromMe // approximate isFromMe
+                    );
                 }
             }
         }
