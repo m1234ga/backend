@@ -223,7 +223,7 @@ class ProcessWhatsAppHooks {
                         io?.emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
                         if (chatId) {
                             io?.to(`conversation_${chatId}`).emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
-                            const normalizedChatId = this.jidToPhone(String(chatId || ''));
+                            const normalizedChatId = chatId.split('@')[0].split(':')[0];
                             if (normalizedChatId && normalizedChatId !== chatId) {
                                 io?.to(`conversation_${normalizedChatId}`).emit(constants_1.SOCKET_EVENTS.REACTION_UPDATED, reactionPayload);
                             }
