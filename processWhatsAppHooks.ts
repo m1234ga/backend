@@ -366,7 +366,7 @@ private async getChatId(info: any) {
     ? this.jidToPhone(phoneRaw)
     : "";
 
-  if (phone) {
+  if (phone&&!isGroup) {
     pushName = await this.resolveAndStoreContact(phone, pushName, chatId);
   }
 

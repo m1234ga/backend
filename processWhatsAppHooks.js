@@ -342,7 +342,7 @@ class ProcessWhatsAppHooks {
         const phone = phoneRaw.includes("@s.whatsapp.net")
             ? this.jidToPhone(phoneRaw)
             : "";
-        if (phone) {
+        if (phone && !isGroup) {
             pushName = await this.resolveAndStoreContact(phone, pushName, chatId);
         }
         phoneRaw = phoneRaw?.match(/^[^@:]+/)?.[0] || "";
