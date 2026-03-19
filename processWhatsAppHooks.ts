@@ -18,6 +18,7 @@ interface HooksType {
   SyncHistory(obj: any): Promise<void>;
   ChatPresence(obj: any): Promise<void>;
   ReadReceipt(obj: any): Promise<void>;
+  JoinedGroup(obj: any): Promise<void>;
 }
 
 class ProcessWhatsAppHooks implements HooksType {
@@ -91,12 +92,23 @@ class ProcessWhatsAppHooks implements HooksType {
         else if (HookObj.type == "ChatPresence") await this.ChatPresence(HookObj);
         else if (HookObj.type == "ReadReceipt") await this.ReadReceipt(HookObj);
         else if (HookObj.type == "Presence") this.Presence(HookObj);
+        else if (HookObj.type === "JoinedGroup") await this.JoinedGroup(HookObj);
       }
     } catch (err) {
       logger.error('Error processing webhook', err);
     }
   }
-
+  async JoinedGroup(obj: any): Promise<void> {
+    try{
+      const event = obj.event;
+      if (!event || !event.Info) return;
+      const conversationId = event.JID.split('@')[0];
+      databaseService.upsertGroup(conversationId, event.Name  || 'Group');
+    }
+    catch(err){
+      logger.error('Error processing JoinedGroup webhook', err);
+    }
+  }
   async Message(obj: any): Promise<void> {
     try {
       const event = obj.event;
