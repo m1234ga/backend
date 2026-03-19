@@ -84,10 +84,24 @@ class ProcessWhatsAppHooks {
                     await this.ReadReceipt(HookObj);
                 else if (HookObj.type == "Presence")
                     this.Presence(HookObj);
+                else if (HookObj.type === "JoinedGroup")
+                    await this.JoinedGroup(HookObj);
             }
         }
         catch (err) {
             logger.error('Error processing webhook', err);
+        }
+    }
+    async JoinedGroup(obj) {
+        try {
+            const event = obj.event;
+            if (!event || !event.Info)
+                return;
+            const conversationId = event.JID.split('@')[0];
+            DatabaseService_1.databaseService.upsertGroup(conversationId, event.Name || 'Group');
+        }
+        catch (err) {
+            logger.error('Error processing JoinedGroup webhook', err);
         }
     }
     async Message(obj) {

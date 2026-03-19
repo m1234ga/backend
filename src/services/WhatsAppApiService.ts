@@ -392,6 +392,13 @@ class WhatsAppApiService {
         return this.request(`user/lid/${encodeURIComponent(cleanPhone)}`);
     }
 
+    /**
+     * Get all groups for the connected account
+     */
+    async getGroupList(): Promise<ApiResponse> {
+        return this.request('group/list');
+    }
+
 }
 
 export const whatsAppApiService = WhatsAppApiService.getInstance();

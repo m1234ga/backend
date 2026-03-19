@@ -24,6 +24,8 @@ const rateLimiter_1 = require("./src/middleware/rateLimiter");
 const constants_1 = require("./src/constants");
 const DBConnection_1 = __importDefault(require("./DBConnection"));
 const auth_1 = require("./src/utils/auth");
+const WhatsAppApiService_1 = require("./src/services/WhatsAppApiService");
+const DatabaseService_1 = require("./src/services/DatabaseService");
 // Handlers
 const SocketHandler_1 = require("./src/handlers/SocketHandler");
 // Routers
@@ -348,6 +350,61 @@ async function ensureDefaultAdminUser() {
         `, [(0, crypto_1.randomUUID)(), username, email, passwordHash, 'Admin', 'User', 'admin', true]);
     logger.warn('Default admin user created', { username });
 }
+function extractGroupsFromGroupListResponse(payload) {
+    const candidates = [
+        payload,
+        payload?.data,
+        payload?.groups,
+        payload?.Groups,
+        payload?.Data,
+        payload?.data?.groups,
+        payload?.data?.Groups,
+        payload?.Data?.groups,
+        payload?.Data?.Groups,
+    ];
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            return candidate;
+        }
+    }
+    return [];
+}
+async function syncGroupsFromWuzApiOnStartup() {
+    try {
+        logger.info('Syncing groups from WuzAPI /group/list on startup');
+        const result = await WhatsAppApiService_1.whatsAppApiService.getGroupList();
+        if (!result.success) {
+            logger.warn('Failed to fetch groups from WuzAPI /group/list', {
+                error: result.error,
+                details: result.details,
+            });
+            return;
+        }
+        const groups = extractGroupsFromGroupListResponse(result.data);
+        if (!groups.length) {
+            logger.info('No groups returned from WuzAPI /group/list');
+            return;
+        }
+        let upserted = 0;
+        for (const group of groups) {
+            const groupJid = String(group?.JID || group?.Jid || group?.jid || '').trim();
+            if (!groupJid || !groupJid.includes('@g.us')) {
+                continue;
+            }
+            const conversationId = groupJid.split('@')[0];
+            const groupName = String(group?.Name || group?.name || group?.subject || 'Group');
+            await DatabaseService_1.databaseService.upsertGroup(conversationId, groupName);
+            upserted += 1;
+        }
+        logger.info('Startup group sync completed', {
+            received: groups.length,
+            upserted,
+        });
+    }
+    catch (error) {
+        logger.error('Startup group sync failed', error);
+    }
+}
 // ============================================================================
 // START SERVER
 // ============================================================================
@@ -356,6 +413,7 @@ async function startServer() {
         await syncDatabaseSchemaOnStartup();
         await ensureChatsInfoView();
         await ensureDefaultAdminUser();
+        await syncGroupsFromWuzApiOnStartup();
     }
     catch (error) {
         logger.error('DB schema sync failed, refusing to start server', error);

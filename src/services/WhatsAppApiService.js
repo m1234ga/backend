@@ -292,5 +292,11 @@ class WhatsAppApiService {
         const cleanPhone = phone.replace(/[^0-9]/g, '');
         return this.request(`user/lid/${encodeURIComponent(cleanPhone)}`);
     }
+    /**
+     * Get all groups for the connected account
+     */
+    async getGroupList() {
+        return this.request('group/list');
+    }
 }
 exports.whatsAppApiService = WhatsAppApiService.getInstance();
