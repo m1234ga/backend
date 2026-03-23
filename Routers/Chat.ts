@@ -1706,31 +1706,76 @@ router.post('/api/CreateNewChat', async (req: Request, res: Response) => {
   }
 });
 
-// Edit message endpoint
-router.put('/api/EditMessage/:messageId', async (req: Request, res: Response) => {
+async function handleEditMessageRequest(req: Request, res: Response) {
   try {
-    const { messageId } = req.params;
-    const { newMessage } = req.body;
+    const paramMessageId = String(req.params?.messageId || '').trim();
+    const bodyMessageId = String(req.body?.Id || req.body?.id || '').trim();
+    const messageId = paramMessageId || bodyMessageId;
+    const newMessage = String(req.body?.newMessage || req.body?.Body || '').trim();
 
-    if (!newMessage) {
-      return res.status(400).json({ error: 'newMessage is required' });
+    if (!messageId) {
+      return res.status(400).json({ error: 'messageId (or Id) is required' });
     }
 
-    const updatedMessage = await prisma.messages.update({
+    if (!newMessage) {
+      return res.status(400).json({ error: 'newMessage (or Body) is required' });
+    }
+
+    let targetPhone = String(req.body?.Phone || req.body?.phone || '').trim();
+    if (!targetPhone) {
+      const existingMessage = await prisma.messages.findUnique({
+        where: { id: messageId },
+        select: { chatId: true, contactId: true },
+      });
+      targetPhone = String(existingMessage?.chatId || existingMessage?.contactId || '').trim();
+    }
+
+    const upstreamPayload: any = {
+      Id: messageId,
+      Body: newMessage,
+    };
+
+    if (targetPhone) {
+      upstreamPayload.Phone = targetPhone;
+    }
+
+    const upstreamResult = await callWuzForCurrentUser(req, 'chat/send/edit', 'POST', upstreamPayload);
+    if (!upstreamResult.ok) {
+      return res.status(502).json({
+        error: 'Wuz API error',
+        details: upstreamResult.data || upstreamResult,
+      });
+    }
+
+    const updateResult = await prisma.messages.updateMany({
       where: { id: messageId },
       data: {
         message: newMessage,
-        isEdit: true
-        // Note: editedAt might not be in schema, if not, skip it or add it
-      }
+        isEdit: true,
+      },
     });
 
-    res.json({ success: true, message: 'Message edited successfully', editedMessage: updatedMessage });
+    const editedMessage = updateResult.count > 0
+      ? await prisma.messages.findUnique({ where: { id: messageId } })
+      : null;
+
+    res.json({
+      success: true,
+      message: 'Message edited successfully',
+      editedMessage,
+      upstream: upstreamResult.data,
+    });
   } catch (error) {
     console.error('Error editing message:', error);
     res.status(500).json({ error: 'Internal Server Error' });
   }
-});
+}
+
+// WuzAPI-compatible endpoint (payload: Id, Body, optional Phone)
+router.post('/api/send/edit', handleEditMessageRequest);
+
+// Backward-compatible endpoint used by frontend (payload: newMessage)
+router.put('/api/EditMessage/:messageId', handleEditMessageRequest);
 
 // Add note to message endpoint
 router.put('/api/AddNoteToMessage/:messageId', async (req: Request, res: Response) => {
