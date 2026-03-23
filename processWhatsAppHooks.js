@@ -136,7 +136,10 @@ class ProcessWhatsAppHooks {
             const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp);
             const isGroup = (info.Chat || "").includes("@g.us");
             let contactId = (info.ContactId || '').toString();
-            if (!contactId) {
+            if (isGroup) {
+                contactId = chatId;
+            }
+            else if (!contactId) {
                 if (isFromMe) {
                     contactId = (this.userJid || '').split('@')[0] || 'Me';
                 }

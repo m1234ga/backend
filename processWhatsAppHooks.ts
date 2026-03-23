@@ -143,7 +143,9 @@ class ProcessWhatsAppHooks implements HooksType {
       const isGroup = (info.Chat || "").includes("@g.us");
 
       let contactId = (info.ContactId || '').toString();
-      if (!contactId) {
+      if (isGroup) {
+        contactId = chatId;
+      } else if (!contactId) {
         if (isFromMe) {
           contactId = (this.userJid || '').split('@')[0] || 'Me';
         } else {
