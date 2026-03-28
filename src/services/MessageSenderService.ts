@@ -257,6 +257,33 @@ export class MessageSenderService {
         );
     }
 
+    private async emitChatUpdated(
+        io: any,
+        updatedChat: any[] | undefined,
+        message: ChatMessage,
+        fallbackLastMessage: string,
+        fallbackTimestamp: Date | string
+    ): Promise<void> {
+        if (!updatedChat || updatedChat.length === 0) return;
+
+        const dbChat = updatedChat[0] || {};
+        const emittedChatId = String(dbChat.id || message.chatId || '');
+        const groupName = emittedChatId
+            ? await databaseService.getGroupName(emittedChatId).catch(() => null)
+            : null;
+        const isGroup = Boolean(groupName) || emittedChatId.includes('@g.us') || (message.phone || '').includes('@g.us');
+
+        io.emit(SOCKET_EVENTS.CHAT_UPDATED, {
+            ...dbChat,
+            id: emittedChatId,
+            name: groupName || dbChat.name || dbChat.pushname || message.pushName || emittedChatId,
+            lastMessage: dbChat.lastMessage || fallbackLastMessage,
+            lastMessageTime: dbChat.lastMessageTime || fallbackTimestamp,
+            phone: isGroup ? emittedChatId : (dbChat.phone || message.phone || emittedChatId),
+            contactId: dbChat.contactId || message.ContactId || message.phone || emittedChatId,
+        });
+    }
+
     /**
      * Send text message
      */
@@ -316,7 +343,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message ?? '', timestamp);
                 }
             }
 
@@ -394,7 +421,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Image]', timestamp);
                 }
             }
 
@@ -473,7 +500,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Video]', timestamp);
                 }
             }
 
@@ -554,7 +581,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, '[Audio]', timestamp);
                 }
             }
 
@@ -635,7 +662,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Document]', timestamp);
                 }
             }
 
@@ -708,7 +735,7 @@ export class MessageSenderService {
                 });
 
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, '[Sticker]', timestamp);
                 }
             }
 
@@ -770,7 +797,7 @@ export class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
 
@@ -831,7 +858,7 @@ export class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
 
@@ -890,7 +917,7 @@ export class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
 

@@ -307,7 +307,12 @@ class ProcessWhatsAppHooks implements HooksType {
         const dbChat = updatedChats?.[0];
         const emittedPushName = dbChat?.pushname || pushName;
         const emittedUnread = dbChat?.unReadCount ?? unreadValue ?? 0;
-        const emittedPhone = this.jidToPhone(String(dbChat?.phone || phoneRaw || contactId || chatId || ''));
+        const emittedGroupName = isGroup
+          ? await databaseService.getGroupName(String(dbChat?.id || chatId || '')).catch(() => null)
+          : null;
+        const emittedPhone = isGroup
+          ? String(dbChat?.id || chatId || '')
+          : this.jidToPhone(String(dbChat?.phone || phoneRaw || contactId || chatId || ''));
         const emittedContactId = isGroup
           ? this.jidToPhone(String(dbChat?.contactId || contactId || chatId || ''))
           : this.jidToPhone(String(phoneRaw || dbChat?.phone || contactId || dbChat?.contactId || chatId || ''));
@@ -323,7 +328,7 @@ class ProcessWhatsAppHooks implements HooksType {
         io.emit(SOCKET_EVENTS.CHAT_UPDATED, {
           ...(dbChat || {}),
           id: dbChat?.id || chatId,
-          name: dbChat?.name || emittedPushName || chatId,
+          name: emittedGroupName || dbChat?.name || emittedPushName || chatId,
           lastMessage: dbChat?.lastMessage || content,
           lastMessageTime: dbChat?.lastMessageTime || timestamp,
           phone: emittedPhone || chatId,

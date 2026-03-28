@@ -164,6 +164,25 @@ class MessageSenderService {
         message.pushName ?? '', message.ContactId || message.phone, userId || 'current_user', { callerFunctionName: 'updateChat' }, true // isFromMe
         );
     }
+    async emitChatUpdated(io, updatedChat, message, fallbackLastMessage, fallbackTimestamp) {
+        if (!updatedChat || updatedChat.length === 0)
+            return;
+        const dbChat = updatedChat[0] || {};
+        const emittedChatId = String(dbChat.id || message.chatId || '');
+        const groupName = emittedChatId
+            ? await DatabaseService_1.databaseService.getGroupName(emittedChatId).catch(() => null)
+            : null;
+        const isGroup = Boolean(groupName) || emittedChatId.includes('@g.us') || (message.phone || '').includes('@g.us');
+        io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, {
+            ...dbChat,
+            id: emittedChatId,
+            name: groupName || dbChat.name || dbChat.pushname || message.pushName || emittedChatId,
+            lastMessage: dbChat.lastMessage || fallbackLastMessage,
+            lastMessageTime: dbChat.lastMessageTime || fallbackTimestamp,
+            phone: isGroup ? emittedChatId : (dbChat.phone || message.phone || emittedChatId),
+            contactId: dbChat.contactId || message.ContactId || message.phone || emittedChatId,
+        });
+    }
     /**
      * Send text message
      */
@@ -200,7 +219,7 @@ class MessageSenderService {
                     pushName: message.pushName
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message ?? '', timestamp);
                 }
             }
             logger.info('Text message sent successfully', { messageId, chatId: message.chatId });
@@ -253,7 +272,7 @@ class MessageSenderService {
                     pushName: message.pushName
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Image]', timestamp);
                 }
             }
             logger.info('Image message sent successfully', { messageId, chatId: message.chatId });
@@ -307,7 +326,7 @@ class MessageSenderService {
                     pushName: message.pushName
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Video]', timestamp);
                 }
             }
             logger.info('Video message sent successfully', { messageId, chatId: message.chatId });
@@ -362,7 +381,7 @@ class MessageSenderService {
                     pushName: message.pushName
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, '[Audio]', timestamp);
                 }
             }
             logger.info('Audio message sent successfully', { messageId, chatId: message.chatId });
@@ -416,7 +435,7 @@ class MessageSenderService {
                     pushName: message.pushName
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, message.message || '[Document]', timestamp);
                 }
             }
             logger.info('Document message sent successfully', { messageId, chatId: message.chatId });
@@ -466,7 +485,7 @@ class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, '[Sticker]', timestamp);
                 }
             }
             return { success: true, messageId };
@@ -507,7 +526,7 @@ class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
             return { success: true, messageId };
@@ -549,7 +568,7 @@ class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
             return { success: true, messageId };
@@ -588,7 +607,7 @@ class MessageSenderService {
                     pushName: message.pushName,
                 });
                 if (updatedChat && updatedChat.length > 0) {
-                    io.emit(constants_1.SOCKET_EVENTS.CHAT_UPDATED, updatedChat[0]);
+                    await this.emitChatUpdated(io, updatedChat, message, content, timestamp);
                 }
             }
             return { success: true, messageId };

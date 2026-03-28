@@ -805,6 +805,26 @@ class DatabaseService {
     }
 
     /**
+     * Resolve group display name by chat ID (stored as bare ID in groups table)
+     */
+    async getGroupName(chatId: string): Promise<string | null> {
+        const sanitizedId = sanitizeChatId(chatId);
+        if (!sanitizedId) return null;
+
+        try {
+            const group = await prisma.groups.findUnique({
+                where: { id: sanitizedId },
+                select: { name: true },
+            });
+
+            return group?.name || null;
+        } catch (error) {
+            logger.error('Failed to get group name', error, { chatId: sanitizedId });
+            throw error;
+        }
+    }
+
+    /**
      * Get phone number from LID map
      */
     async getPhoneFromLid(chatId: string): Promise<string | undefined> {
