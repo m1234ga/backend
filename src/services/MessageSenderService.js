@@ -115,11 +115,52 @@ class MessageSenderService {
     }
     resolveTimestamp(rawData) {
         const unixLike = rawData?.Timestamp ?? rawData?.TimeStamp ?? Date.now();
+        if (typeof unixLike === 'string') {
+            const parsedMillis = Date.parse(unixLike);
+            if (Number.isFinite(parsedMillis)) {
+                return (0, timezone_1.adjustToConfiguredTimezone)(new Date(parsedMillis));
+            }
+        }
         const asNumber = Number(unixLike);
         const millis = Number.isFinite(asNumber)
             ? (asNumber > 9_999_999_999 ? asNumber : asNumber * 1000)
             : Date.now();
         return (0, timezone_1.adjustToConfiguredTimezone)(new Date(millis));
+    }
+    getApiPayloadData(result) {
+        // WuzAPI may return either { success, data: {...} } or { success, data: { data: {...} } }
+        return result?.data?.data ?? result?.data ?? {};
+    }
+    hasValidAckTimestamp(rawTimestamp) {
+        if (rawTimestamp === undefined || rawTimestamp === null)
+            return false;
+        if (typeof rawTimestamp === 'string') {
+            const parsedMillis = Date.parse(rawTimestamp);
+            if (Number.isFinite(parsedMillis))
+                return true;
+            const numeric = Number(rawTimestamp);
+            return Number.isFinite(numeric);
+        }
+        if (typeof rawTimestamp === 'number') {
+            return Number.isFinite(rawTimestamp);
+        }
+        return false;
+    }
+    validateSendAcknowledgement(result) {
+        const payload = this.getApiPayloadData(result);
+        const details = String(payload?.Details ?? payload?.details ?? '').trim().toLowerCase();
+        const providerMessageId = String(payload?.Id ?? payload?.id ?? '').trim();
+        const rawTimestamp = payload?.Timestamp ?? payload?.TimeStamp ?? payload?.timestamp ?? payload?.timeStamp;
+        if (details !== 'sent') {
+            return { isValid: false, error: 'WhatsApp API response missing sent acknowledgement' };
+        }
+        if (!providerMessageId) {
+            return { isValid: false, error: 'WhatsApp API response missing message Id' };
+        }
+        if (!this.hasValidAckTimestamp(rawTimestamp)) {
+            return { isValid: false, error: 'WhatsApp API response missing valid Timestamp' };
+        }
+        return { isValid: true, payload };
     }
     normalizeReactionTarget(target) {
         const raw = (target || '').trim();
@@ -205,7 +246,15 @@ class MessageSenderService {
             if (!result.success) {
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const updatedChat = await this.updateChat(message, message.message ?? '', timestamp, currentUser?.id);
             // Save to database
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.TEXT, message.message ?? '', timestamp, undefined, currentUser?.id);
@@ -258,7 +307,16 @@ class MessageSenderService {
                 this.cleanupFile(imageFile.path);
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                this.cleanupFile(imageFile.path);
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const mediaPath = `imgs/${imageFile.filename}`;
             const updatedChat = await this.updateChat(message, message.message || '[Image]', timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.IMAGE, message.message || '[Image]', timestamp, mediaPath, currentUser?.id);
@@ -312,7 +370,16 @@ class MessageSenderService {
                 this.cleanupFile(videoFile.path);
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                this.cleanupFile(videoFile.path);
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const mediaPath = `video/${videoFile.filename}`;
             const updatedChat = await this.updateChat(message, message.message || '[Video]', timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.VIDEO, message.message || '[Video]', timestamp, mediaPath, currentUser?.id);
@@ -367,7 +434,16 @@ class MessageSenderService {
                 this.cleanupFile(audioFile.path);
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                this.cleanupFile(audioFile.path);
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const mediaPath = `audio/${audioFile.filename}`;
             const updatedChat = await this.updateChat(message, '[Audio]', timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.AUDIO, '[Audio]', timestamp, mediaPath, currentUser?.id);
@@ -421,7 +497,16 @@ class MessageSenderService {
                 this.cleanupFile(documentFile.path);
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = (0, timezone_1.adjustToConfiguredTimezone)(new Date(result.data?.data?.Timestamp * 1000 || result.data?.data?.TimeStamp * 1000 || Date.now()));
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                this.cleanupFile(documentFile.path);
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const mediaPath = `docs/${documentFile.filename}`;
             const updatedChat = await this.updateChat(message, message.message || '[Document]', timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.DOCUMENT, message.message || documentFile.filename || '[Document]', timestamp, mediaPath, currentUser?.id);
@@ -473,7 +558,16 @@ class MessageSenderService {
                 this.cleanupFile(stickerFile.path);
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                this.cleanupFile(stickerFile.path);
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const mediaPath = `imgs/${stickerFile.filename}`;
             const updatedChat = await this.updateChat(message, '[Sticker]', timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.STICKER, '[Sticker]', timestamp, mediaPath, currentUser?.id);
@@ -513,7 +607,15 @@ class MessageSenderService {
             if (!result.success) {
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             // Always persist coordinates so the UI can open map links from history/sync messages.
             const content = `[Location] ${message.latitude.toFixed(6)},${message.longitude.toFixed(6)}${message.locationName ? ` (${message.locationName})` : ''}`;
             const updatedChat = await this.updateChat(message, content, timestamp, currentUser?.id);
@@ -553,7 +655,15 @@ class MessageSenderService {
             if (!result.success) {
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const vcardPhoneMatch = String(message.vcard || '').match(/TEL[^:]*:([^\r\n]+)/i);
             const parsedPhone = vcardPhoneMatch ? vcardPhoneMatch[1].replace(/[\s-]/g, '').trim() : '';
             // Persist contact phone in a parseable format so UI can open call/details from stored history.
@@ -595,7 +705,15 @@ class MessageSenderService {
             if (!result.success) {
                 return { success: false, error: result.error, details: result.details };
             }
-            const timestamp = this.resolveTimestamp(result.data?.data);
+            const ack = this.validateSendAcknowledgement(result);
+            if (!ack.isValid) {
+                logger.warn('Skipping DB write due to invalid send acknowledgement payload', {
+                    chatId: message.chatId,
+                    payload: this.getApiPayloadData(result),
+                });
+                return { success: false, error: ack.error, details: result.data };
+            }
+            const timestamp = this.resolveTimestamp(ack.payload);
             const content = message.message || `[Poll] ${message.pollName}`;
             const updatedChat = await this.updateChat(message, content, timestamp, currentUser?.id);
             const savedMessage = await this.saveMessageToDb(messageId, message, constants_1.MESSAGE_TYPES.POLL, content, timestamp, undefined, currentUser?.id);

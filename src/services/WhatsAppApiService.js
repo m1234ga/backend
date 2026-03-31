@@ -60,6 +60,13 @@ class WhatsAppApiService {
                 };
             }
             const data = await response.json();
+            if (typeof data?.success === 'boolean' && !data.success) {
+                return {
+                    success: false,
+                    error: data?.error || data?.message || constants_1.ERROR_MESSAGES.EXTERNAL_API_ERROR,
+                    details: data,
+                };
+            }
             return { success: true, data };
         }
         catch (error) {
