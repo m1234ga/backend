@@ -131,7 +131,15 @@ class ProcessWhatsAppHooks {
             // 1. Determine basic info (Mirrors old implementation)
             // For reaction webhooks, messageId must point to the reacted message.
             const reactionTargetMessageId = message?.reactionMessage?.key?.ID || message?.reactionMessage?.key?.id;
-            const messageId = reactionTargetMessageId || info.ID || info.id;
+            const protocolEditPayload = message?.protocolMessage?.editedMessage;
+            const protocolEditTargetMessageId = message?.protocolMessage?.key?.ID || message?.protocolMessage?.key?.id;
+            const isEditMessage = info?.IsEdit === true ||
+                info?.Edit === true ||
+                info?.Edit === 1 ||
+                info?.Edit === '1' ||
+                message?.protocolMessage?.type === 14 ||
+                !!protocolEditPayload;
+            const messageId = reactionTargetMessageId || (isEditMessage ? protocolEditTargetMessageId : null) || info.ID || info.id;
             const isFromMe = info.IsFromMe || false;
             const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp);
             const isGroup = (info.Chat || "").includes("@g.us");
@@ -165,7 +173,15 @@ class ProcessWhatsAppHooks {
             if (contextInfo && (contextInfo.stanzaId || contextInfo.stanzaID)) {
                 replyToMessageId = contextInfo.stanzaId || contextInfo.stanzaID;
             }
-            if (message.conversation) {
+            if (isEditMessage && protocolEditPayload) {
+                content =
+                    protocolEditPayload.conversation ||
+                        protocolEditPayload.extendedTextMessage?.text ||
+                        message.conversation ||
+                        message.extendedTextMessage?.text ||
+                        '';
+            }
+            else if (message.conversation) {
                 content = message.conversation;
             }
             else if (message.extendedTextMessage) {
@@ -259,7 +275,7 @@ class ProcessWhatsAppHooks {
             const unreadCount = typeof info.unreadCount === "number" ? info.unreadCount : undefined;
             const updatedChats = await DatabaseService_1.databaseService.upsertChat(chatId, content, timestamp, unreadCount, true, // isOnline
             false, // isTyping
-            pushName, contactId, this.userJid, { incrementUnreadOnIncoming: isLiveMessage, callerFunctionName: 'processSingleMessage' }, // options
+            pushName, contactId, this.userJid, { incrementUnreadOnIncoming: isLiveMessage && !isEditMessage, callerFunctionName: 'processSingleMessage' }, // options
             isFromMe);
             // 4. Upsert Message
             const messageContactId = isFromMe
@@ -277,7 +293,8 @@ class ProcessWhatsAppHooks {
                 status: isFromMe ? 'sent' : 'read',
                 mediaPath,
                 userId: isFromMe ? 'Me' : undefined,
-                replyToMessageId
+                replyToMessageId,
+                isEdit: isEditMessage
             });
             const unreadValue = updatedChats?.[0]?.unReadCount;
             // 6. Emit to Socket

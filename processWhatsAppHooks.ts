@@ -137,7 +137,16 @@ class ProcessWhatsAppHooks implements HooksType {
       // 1. Determine basic info (Mirrors old implementation)
       // For reaction webhooks, messageId must point to the reacted message.
       const reactionTargetMessageId = message?.reactionMessage?.key?.ID || message?.reactionMessage?.key?.id;
-      const messageId = reactionTargetMessageId || info.ID || info.id;
+      const protocolEditPayload = message?.protocolMessage?.editedMessage;
+      const protocolEditTargetMessageId = message?.protocolMessage?.key?.ID || message?.protocolMessage?.key?.id;
+      const isEditMessage =
+        info?.IsEdit === true ||
+        info?.Edit === true ||
+        info?.Edit === 1 ||
+        info?.Edit === '1' ||
+        message?.protocolMessage?.type === 14 ||
+        !!protocolEditPayload;
+      const messageId = reactionTargetMessageId || (isEditMessage ? protocolEditTargetMessageId : null) || info.ID || info.id;
       const isFromMe = info.IsFromMe || false;
       const timestamp = this.normalizeTimestamp(info.Timestamp || info.timeStamp);
       const isGroup = (info.Chat || "").includes("@g.us");
@@ -174,7 +183,14 @@ class ProcessWhatsAppHooks implements HooksType {
         replyToMessageId = contextInfo.stanzaId||contextInfo.stanzaID;
       }
 
-      if (message.conversation) {
+      if (isEditMessage && protocolEditPayload) {
+        content =
+          protocolEditPayload.conversation ||
+          protocolEditPayload.extendedTextMessage?.text ||
+          message.conversation ||
+          message.extendedTextMessage?.text ||
+          '';
+      } else if (message.conversation) {
         content = message.conversation;
       } else if (message.extendedTextMessage) {
         content = message.extendedTextMessage.text;
@@ -272,7 +288,7 @@ class ProcessWhatsAppHooks implements HooksType {
         pushName,
         contactId,
         this.userJid,
-        { incrementUnreadOnIncoming: isLiveMessage, callerFunctionName: 'processSingleMessage' }, // options
+        { incrementUnreadOnIncoming: isLiveMessage && !isEditMessage, callerFunctionName: 'processSingleMessage' }, // options
         isFromMe
       );
 
@@ -292,7 +308,8 @@ class ProcessWhatsAppHooks implements HooksType {
         status: isFromMe ? 'sent' : 'read',
         mediaPath,
         userId: isFromMe ? 'Me' : undefined,
-        replyToMessageId
+        replyToMessageId,
+        isEdit: isEditMessage
       });
       const unreadValue = updatedChats?.[0]?.unReadCount;
 

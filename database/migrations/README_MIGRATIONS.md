@@ -17,6 +17,11 @@
 - **Columns**: `id`, `messageId`, `participant`, `reaction`, `createdAt`
 - **Migration File**: `backend/database/migrations/create_message_reactions_table.sql`
 
+### 4. `message_edits` table
+- **Purpose**: Stores full edit history for messages
+- **Columns**: `id`, `messageId`, `oldMessage`, `newMessage`, `editedAt`
+- **Migration File**: `backend/database/migrations/create_message_edits_table.sql`
+
 ## How to Run Migrations
 
 ### Option 1: Run migrations manually via psql
@@ -29,6 +34,7 @@ psql -U your_username -d your_database_name
 \i backend/database/migrations/add_media_path_to_messages.sql
 \i backend/database/migrations/add_media_path_to_message_templates.sql
 \i backend/database/migrations/create_message_reactions_table.sql
+\i backend/database/migrations/create_message_edits_table.sql
 ```
 
 ### Option 2: Run via Node.js script
@@ -40,6 +46,7 @@ cd backend
 psql -U your_username -d your_database_name -f database/migrations/add_media_path_to_messages.sql
 psql -U your_username -d your_database_name -f database/migrations/add_media_path_to_message_templates.sql
 psql -U your_username -d your_database_name -f database/migrations/create_message_reactions_table.sql
+psql -U your_username -d your_database_name -f database/migrations/create_message_edits_table.sql
 ```
 
 ### Option 3: The code will handle it automatically
@@ -61,6 +68,10 @@ The backend code includes `ALTER TABLE IF EXISTS` statements that will create th
 
 3. **Models**:
    - Updated `ChatMessage` interface to include optional `mediaPath` field
+
+4. **Message Edit History**:
+   - Added `message_edits` table to preserve all message revisions
+   - Updated message upsert flow to append history rows when edit events arrive
 
 ## Usage Example
 

@@ -163,12 +163,18 @@ class DatabaseService {
             const initialStatus = messageData.status || (messageData.isFromMe ? 'sent' : 'read');
             const isDelivered = initialStatus === 'delivered' || initialStatus === 'read';
             const isRead = initialStatus === 'read';
+            const isEdit = messageData.isEdit === true;
+            let previousMessageText = null;
+            if (isEdit) {
+                const existingRows = await prismaClient_1.default.$queryRawUnsafe(`SELECT message FROM messages WHERE id = $1 LIMIT 1`, messageData.id);
+                previousMessageText = existingRows?.[0]?.message ?? null;
+            }
             const rows = await prismaClient_1.default.$queryRawUnsafe(`
                 INSERT INTO messages (
-                    id, "chatId", message, "timeStamp", "isDelivered", "isRead", "messageType", "isFromMe", "contactId", "isEdit", "mediaPath", "userId", "replyToMessageId", status
+                    id, "chatId", message, "timeStamp", "isDelivered", "isRead", "messageType", "isFromMe", "contactId", "isEdit", "mediaPath", "userId", "replyToMessageId", status, note
                 )
                 VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, $11, $12, $13
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     message = EXCLUDED.message,
@@ -176,10 +182,14 @@ class DatabaseService {
                     "messageType" = EXCLUDED."messageType",
                     "isFromMe" = EXCLUDED."isFromMe",
                     "contactId" = COALESCE(EXCLUDED."contactId", messages."contactId"),
-                    "isEdit" = false,
+                    "isEdit" = EXCLUDED."isEdit",
                     "mediaPath" = EXCLUDED."mediaPath",
                     "userId" = EXCLUDED."userId",
                     "replyToMessageId" = EXCLUDED."replyToMessageId",
+                    note = CASE
+                        WHEN EXCLUDED."isEdit" = true THEN messages.message
+                        ELSE COALESCE(EXCLUDED.note, messages.note)
+                    END,
                     status = CASE
                         WHEN messages.status = 'failed' THEN 'failed'
                         WHEN messages.status = 'read' THEN 'read'
@@ -199,8 +209,22 @@ class DatabaseService {
                         ELSE COALESCE(messages."isRead", false)
                     END
                 RETURNING *
-                `, messageData.id, sanitizedChatId, messageData.message, normalizedTimestamp, isDelivered, isRead, messageData.messageType, messageData.isFromMe, sanitizedContactId, messageData.mediaPath || null, messageData.userId || null, messageData.replyToMessageId || null, initialStatus);
+                `, messageData.id, sanitizedChatId, messageData.message, normalizedTimestamp, isDelivered, isRead, messageData.messageType, messageData.isFromMe, sanitizedContactId, isEdit, messageData.mediaPath || null, messageData.userId || null, messageData.replyToMessageId || null, initialStatus, messageData.note || null);
             const result = rows?.[0];
+            if (isEdit && previousMessageText !== null && previousMessageText !== messageData.message) {
+                try {
+                    await prismaClient_1.default.$executeRawUnsafe(`
+                        INSERT INTO message_edits ("messageId", "oldMessage", "newMessage", "editedAt")
+                        VALUES ($1, $2, $3, $4)
+                        `, messageData.id, previousMessageText, messageData.message, normalizedTimestamp);
+                }
+                catch (historyError) {
+                    logger.warn('Failed to write message edit history (table may be missing)', {
+                        messageId: messageData.id,
+                        code: historyError?.code,
+                    });
+                }
+            }
             logger.debug('Message upserted', { messageId: messageData.id });
             return result;
         }

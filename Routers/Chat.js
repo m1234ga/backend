@@ -10,6 +10,7 @@ const MessageSenderService_1 = require("../src/services/MessageSenderService");
 const auth_1 = require("../src/utils/auth");
 const SocketHandler_1 = require("../src/handlers/SocketHandler");
 const timezone_1 = require("../src/utils/timezone");
+const WhatsAppApiService_1 = require("../src/services/WhatsAppApiService");
 const prismaClient_1 = __importDefault(require("../prismaClient"));
 const WuzDBConnection_1 = __importDefault(require("../WuzDBConnection"));
 const router = (0, express_1.Router)();
@@ -705,6 +706,32 @@ router.post('/api/user/info', async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
+router.get('/api/GetUserLid/:phone', async (req, res) => {
+    try {
+        const cleanPhone = String(req.params.phone || '').replace(/[^0-9]/g, '');
+        if (!cleanPhone) {
+            return res.status(400).json({ error: 'Invalid phone number' });
+        }
+        const result = await WhatsAppApiService_1.whatsAppApiService.getUserLid(cleanPhone);
+        if (!result.success) {
+            return res.status(502).json({ error: result.error || 'Wuz API error', details: result.data || null });
+        }
+        const payload = (result.data && typeof result.data === 'object' && 'data' in result.data)
+            ? result.data.data || {}
+            : result.data || {};
+        const rawLid = payload.lid ?? payload.Lid ?? payload.ID ?? payload.id;
+        const lid = String(rawLid || '').trim().split('@')[0];
+        if (!lid) {
+            return res.status(404).json({ error: 'LID not found' });
+        }
+        const jid = String(payload.jid ?? payload.JID ?? '').trim() || undefined;
+        return res.json({ jid, lid });
+    }
+    catch (error) {
+        console.error('Error fetching user LID:', error);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
 // Refresh chat avatar from WuzAPI
 router.post('/api/RefreshChatAvatar', async (req, res) => {
     try {
@@ -797,6 +824,22 @@ router.get('/api/GetMessages/:id', async (req, res) => {
             LEFT JOIN lid_mappings lm ON mr.participant = lm.phone
             WHERE mr."messageId" = m.id
           ) as reactions
+          ,(
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', me.id,
+                  'oldMessage', me."oldMessage",
+                  'newMessage', me."newMessage",
+                  'editedAt', to_char(me."editedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                )
+                ORDER BY me."editedAt" ASC
+              ),
+              '[]'::json
+            )
+            FROM message_edits me
+            WHERE me."messageId" = m.id
+          ) as "editHistory"
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
@@ -841,6 +884,22 @@ router.get('/api/GetMessages/:id', async (req, res) => {
             LEFT JOIN lid_mappings lm ON mr.participant = lm.phone
             WHERE mr."messageId" = m.id
           ) as reactions
+          ,(
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', me.id,
+                  'oldMessage', me."oldMessage",
+                  'newMessage', me."newMessage",
+                  'editedAt', to_char(me."editedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                )
+                ORDER BY me."editedAt" ASC
+              ),
+              '[]'::json
+            )
+            FROM message_edits me
+            WHERE me."messageId" = m.id
+          ) as "editHistory"
                    FROM messages m 
                    LEFT JOIN chats c ON m."chatId" = c.id 
                    LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
@@ -872,6 +931,22 @@ router.get('/api/GetMessages/:id', async (req, res) => {
                   'sender', COALESCE(rau.username, CASE WHEN reply."isFromMe" = true THEN 'user' ELSE COALESCE(lm2.full_name, lm2.first_name, lm2.push_name, reply."contactId") END)
                 )
               ELSE NULL END as "replyToMessage"
+              ,(
+                SELECT COALESCE(
+                  json_agg(
+                    json_build_object(
+                      'id', me.id,
+                      'oldMessage', me."oldMessage",
+                      'newMessage', me."newMessage",
+                      'editedAt', to_char(me."editedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                    )
+                    ORDER BY me."editedAt" ASC
+                  ),
+                  '[]'::json
+                )
+                FROM message_edits me
+                WHERE me."messageId" = m.id
+              ) as "editHistory"
               FROM messages m 
               LEFT JOIN chats c ON m."chatId" = c.id
               LEFT JOIN messages reply ON reply.id=m."replyToMessageId"
