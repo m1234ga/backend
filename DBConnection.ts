@@ -17,6 +17,10 @@ for (const envPath of envPaths) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: 20,              // Increased from default 10 for better concurrency
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  statement_timeout: 30000, // 30s timeout per query
 });
 
 // Helper to provide compatibility with existing code that expects getConnection().execute()

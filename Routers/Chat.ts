@@ -180,6 +180,9 @@ router.get('/api/GetChatsPage', async (req: Request, res: Response) => {
     baseSql += ' ORDER BY ci."lastMessageTime" DESC, ci.id DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
     params.push(limit, offset);
 
+    // Add cache headers for performance (can be invalidated via socket updates)
+    res.set('Cache-Control', 'private, max-age=5');
+
     const chats = await prisma.$queryRawUnsafe(baseSql, ...params);
     res.json({ page, limit, tab, chats });
   } catch (error) {

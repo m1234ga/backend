@@ -312,24 +312,17 @@ SELECT chats.id,
        chats.ismuted,
        chats.status,
        chats.avatar,
-       last_msg.status AS "lastMessageStatus"
+       NULL::varchar AS "lastMessageStatus"
 FROM chats
 LEFT JOIN lid_mappings lm ON lm.lid::text = chats.id::text
 LEFT JOIN groups ON groups.id = chats.id::text
 LEFT JOIN (
     SELECT "chatTags"."chatId",
-           string_agg((tags_1."tagName" || '_-_'::text) || tags_1."tagId"::text, '-_-'::text) AS tagsname
+           string_agg((tags_1."tagName" || '_-_'::text) || tags_1."tagId"::text, '-_-'::text ORDER BY tags_1."tagId") AS tagsname
     FROM tags tags_1
-    JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
+    INNER JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
     GROUP BY "chatTags"."chatId"
-) tags ON tags."chatId"::text = chats.id::text
-LEFT JOIN LATERAL (
-    SELECT messages.status
-    FROM messages
-    WHERE messages."chatId"::text = chats.id::text
-    ORDER BY messages."timeStamp" DESC
-    LIMIT 1
-) last_msg ON true;
+) tags ON tags."chatId"::text = chats.id::text;
 `;
     logger.info('Ensuring chatsinfo view exists and is up to date');
     await DBConnection_1.default.query(sql);
