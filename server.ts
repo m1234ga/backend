@@ -330,11 +330,35 @@ async function syncDatabaseSchemaOnStartup(): Promise<void> {
     }
 
     logger.info('Running DB schema sync on startup', { mode, command });
-    execSync(command, {
-        stdio: 'inherit',
-        cwd: __dirname,
-        env: process.env,
-    });
+    try {
+        execSync(command, {
+            stdio: 'inherit',
+            cwd: __dirname,
+            env: process.env,
+        });
+    } catch (error) {
+        const errorObject = error as { stderr?: Buffer; stdout?: Buffer; message?: string };
+        const errorText = String(errorObject.stderr?.toString() || '')
+            + String(errorObject.stdout?.toString() || '')
+            + String(errorObject.message || '');
+
+        if (mode === 'migrate' && errorText.includes('20260428000001_optimize_chatsinfo_view')) {
+            logger.warn('Detected failed chatsinfo optimization migration; applying recovery path', {
+                migration: '20260428000001_optimize_chatsinfo_view',
+            });
+
+            await ensureChatsInfoView();
+            execSync(`npx prisma migrate resolve --applied 20260428000001_optimize_chatsinfo_view --schema ${schemaFile}`, {
+                stdio: 'inherit',
+                cwd: __dirname,
+                env: process.env,
+            });
+
+            logger.info('Recovered failed chatsinfo optimization migration');
+        } else {
+            throw error;
+        }
+    }
     logger.info('DB schema sync completed successfully');
 }
 
@@ -358,7 +382,7 @@ SELECT chats.id,
        chats.ismuted,
        chats.status,
        chats.avatar,
-       NULL::varchar AS "lastMessageStatus"
+       NULL::character varying(20) AS "lastMessageStatus"
 FROM chats
 LEFT JOIN lid_mappings lm ON lm.lid::text = chats.id::text
 LEFT JOIN groups ON groups.id = chats.id::text

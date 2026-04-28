@@ -20,7 +20,7 @@ SELECT chats.id,
        chats.ismuted,
        chats.status,
        chats.avatar,
-       NULL::varchar AS "lastMessageStatus"
+       NULL::character varying(20) AS "lastMessageStatus"
 FROM chats
 LEFT JOIN lid_mappings lm ON lm.lid::text = chats.id::text
 LEFT JOIN groups ON groups.id = chats.id::text
