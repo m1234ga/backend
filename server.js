@@ -242,6 +242,16 @@ async function shouldBaselineExistingDatabase() {
         `);
     return Boolean(appTablesResult.rows[0]?.exists);
 }
+async function hasFailedMigration(migrationName) {
+    const migrationResult = await DBConnection_1.default.query(`
+        SELECT 1
+        FROM "_prisma_migrations"
+        WHERE migration_name = $1
+          AND finished_at IS NULL
+        LIMIT 1
+        `, [migrationName]);
+    return migrationResult.rows.length > 0;
+}
 function resolveExistingMigrationsAsApplied(schemaFile) {
     const migrationsDir = path_1.default.join(__dirname, path_1.default.dirname(schemaFile), 'migrations');
     if (!fs_1.default.existsSync(migrationsDir)) {
@@ -283,6 +293,18 @@ async function syncDatabaseSchemaOnStartup() {
     });
     if (mode === 'migrate' && await shouldBaselineExistingDatabase()) {
         resolveExistingMigrationsAsApplied(schemaFile);
+    }
+    if (mode === 'migrate' && await hasFailedMigration('20260428000001_optimize_chatsinfo_view')) {
+        logger.warn('Detected failed chatsinfo optimization migration before deploy; applying recovery path', {
+            migration: '20260428000001_optimize_chatsinfo_view',
+        });
+        await ensureChatsInfoView();
+        (0, child_process_1.execSync)(`npx prisma migrate resolve --applied 20260428000001_optimize_chatsinfo_view --schema ${schemaFile}`, {
+            stdio: 'inherit',
+            cwd: __dirname,
+            env: process.env,
+        });
+        logger.info('Recovered failed chatsinfo optimization migration before deploy');
     }
     logger.info('Running DB schema sync on startup', { mode, command });
     try {
