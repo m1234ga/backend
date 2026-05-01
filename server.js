@@ -394,17 +394,6 @@ LEFT JOIN (
     INNER JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
     GROUP BY "chatTags"."chatId"
 ) tags ON tags."chatId"::text = chats.id::text;
-    // If Prisma already recorded the migration as applied, there is nothing to resolve.
-    // This avoids triggering P3008 on repeat startups or after partial recovery.
-    if (migrationName === '20260428000001_optimize_chatsinfo_view') {
-        void hasAppliedMigration(migrationName).then((alreadyApplied) => {
-            if (alreadyApplied) {
-                logger.info('Migration already recorded as applied; skipping resolve', {
-                    migration: migrationName,
-                });
-            }
-        });
-    }
 `;
     logger.info('Ensuring chatsinfo view exists and is up to date');
     await DBConnection_1.default.query(sql);
