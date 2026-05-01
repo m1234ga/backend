@@ -268,11 +268,29 @@ function resolveExistingMigrationsAsApplied(schemaFile) {
         migrationNames,
     });
     for (const migrationName of migrationNames) {
+        resolveMigrationAsApplied(migrationName, schemaFile);
+    }
+}
+function resolveMigrationAsApplied(migrationName, schemaFile) {
+    try {
         (0, child_process_1.execSync)(`npx prisma migrate resolve --applied ${migrationName} --schema ${schemaFile}`, {
             stdio: 'inherit',
             cwd: __dirname,
             env: process.env,
         });
+    }
+    catch (error) {
+        const errorObject = error;
+        const errorText = String(errorObject.stderr?.toString() || '')
+            + String(errorObject.stdout?.toString() || '')
+            + String(errorObject.message || '');
+        if (errorText.includes('P3008') && errorText.includes('already recorded as applied')) {
+            logger.warn('Migration already recorded as applied; skipping resolve', {
+                migration: migrationName,
+            });
+            return;
+        }
+        throw error;
     }
 }
 async function syncDatabaseSchemaOnStartup() {
@@ -299,11 +317,7 @@ async function syncDatabaseSchemaOnStartup() {
             migration: '20260428000001_optimize_chatsinfo_view',
         });
         await ensureChatsInfoView();
-        (0, child_process_1.execSync)(`npx prisma migrate resolve --applied 20260428000001_optimize_chatsinfo_view --schema ${schemaFile}`, {
-            stdio: 'inherit',
-            cwd: __dirname,
-            env: process.env,
-        });
+        resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
         logger.info('Recovered failed chatsinfo optimization migration before deploy');
     }
     logger.info('Running DB schema sync on startup', { mode, command });
@@ -324,11 +338,7 @@ async function syncDatabaseSchemaOnStartup() {
                 migration: '20260428000001_optimize_chatsinfo_view',
             });
             await ensureChatsInfoView();
-            (0, child_process_1.execSync)(`npx prisma migrate resolve --applied 20260428000001_optimize_chatsinfo_view --schema ${schemaFile}`, {
-                stdio: 'inherit',
-                cwd: __dirname,
-                env: process.env,
-            });
+            resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
             logger.info('Recovered failed chatsinfo optimization migration');
         }
         else {
