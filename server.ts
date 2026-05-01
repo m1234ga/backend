@@ -293,7 +293,22 @@ async function hasFailedMigration(migrationName: string): Promise<boolean> {
     return migrationResult.rows.length > 0;
 }
 
-function resolveExistingMigrationsAsApplied(schemaFile: string): void {
+async function hasAppliedMigration(migrationName: string): Promise<boolean> {
+        const migrationResult = await pool.query(
+                `
+                SELECT 1
+                FROM "_prisma_migrations"
+                WHERE migration_name = $1
+                    AND finished_at IS NOT NULL
+                LIMIT 1
+                `,
+                [migrationName]
+        );
+
+        return migrationResult.rows.length > 0;
+}
+
+async function resolveExistingMigrationsAsApplied(schemaFile: string): Promise<void> {
     const migrationsDir = path.join(__dirname, path.dirname(schemaFile), 'migrations');
     if (!fs.existsSync(migrationsDir)) {
         throw new Error(`Prisma migrations directory not found: ${migrationsDir}`);
@@ -313,11 +328,18 @@ function resolveExistingMigrationsAsApplied(schemaFile: string): void {
     });
 
     for (const migrationName of migrationNames) {
-        resolveMigrationAsApplied(migrationName, schemaFile);
+        await resolveMigrationAsApplied(migrationName, schemaFile);
     }
 }
 
-function resolveMigrationAsApplied(migrationName: string, schemaFile: string): void {
+async function resolveMigrationAsApplied(migrationName: string, schemaFile: string): Promise<void> {
+    if (await hasAppliedMigration(migrationName)) {
+        logger.info('Migration already recorded as applied; skipping resolve', {
+            migration: migrationName,
+        });
+        return;
+    }
+
     try {
         execSync(`npx prisma migrate resolve --applied ${migrationName} --schema ${schemaFile}`, {
             stdio: 'inherit',
@@ -361,7 +383,7 @@ async function syncDatabaseSchemaOnStartup(): Promise<void> {
     });
 
     if (mode === 'migrate' && await shouldBaselineExistingDatabase()) {
-        resolveExistingMigrationsAsApplied(schemaFile);
+        await resolveExistingMigrationsAsApplied(schemaFile);
     }
 
     if (mode === 'migrate' && await hasFailedMigration('20260428000001_optimize_chatsinfo_view')) {
@@ -370,7 +392,7 @@ async function syncDatabaseSchemaOnStartup(): Promise<void> {
         });
 
         await ensureChatsInfoView();
-        resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
+        await resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
 
         logger.info('Recovered failed chatsinfo optimization migration before deploy');
     }
@@ -394,7 +416,7 @@ async function syncDatabaseSchemaOnStartup(): Promise<void> {
             });
 
             await ensureChatsInfoView();
-            resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
+            await resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
 
             logger.info('Recovered failed chatsinfo optimization migration');
         } else {
@@ -435,6 +457,17 @@ LEFT JOIN (
     INNER JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
     GROUP BY "chatTags"."chatId"
 ) tags ON tags."chatId"::text = chats.id::text;
+    // If Prisma already recorded the migration as applied, there is nothing to resolve.
+    // This avoids triggering P3008 on repeat startups or after partial recovery.
+    if (migrationName === '20260428000001_optimize_chatsinfo_view') {
+        void hasAppliedMigration(migrationName).then((alreadyApplied) => {
+            if (alreadyApplied) {
+                logger.info('Migration already recorded as applied; skipping resolve', {
+                    migration: migrationName,
+                });
+            }
+        });
+    }
 `;
 
     logger.info('Ensuring chatsinfo view exists and is up to date');

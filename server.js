@@ -252,7 +252,17 @@ async function hasFailedMigration(migrationName) {
         `, [migrationName]);
     return migrationResult.rows.length > 0;
 }
-function resolveExistingMigrationsAsApplied(schemaFile) {
+async function hasAppliedMigration(migrationName) {
+    const migrationResult = await DBConnection_1.default.query(`
+                SELECT 1
+                FROM "_prisma_migrations"
+                WHERE migration_name = $1
+                    AND finished_at IS NOT NULL
+                LIMIT 1
+                `, [migrationName]);
+    return migrationResult.rows.length > 0;
+}
+async function resolveExistingMigrationsAsApplied(schemaFile) {
     const migrationsDir = path_1.default.join(__dirname, path_1.default.dirname(schemaFile), 'migrations');
     if (!fs_1.default.existsSync(migrationsDir)) {
         throw new Error(`Prisma migrations directory not found: ${migrationsDir}`);
@@ -268,10 +278,16 @@ function resolveExistingMigrationsAsApplied(schemaFile) {
         migrationNames,
     });
     for (const migrationName of migrationNames) {
-        resolveMigrationAsApplied(migrationName, schemaFile);
+        await resolveMigrationAsApplied(migrationName, schemaFile);
     }
 }
-function resolveMigrationAsApplied(migrationName, schemaFile) {
+async function resolveMigrationAsApplied(migrationName, schemaFile) {
+    if (await hasAppliedMigration(migrationName)) {
+        logger.info('Migration already recorded as applied; skipping resolve', {
+            migration: migrationName,
+        });
+        return;
+    }
     try {
         (0, child_process_1.execSync)(`npx prisma migrate resolve --applied ${migrationName} --schema ${schemaFile}`, {
             stdio: 'inherit',
@@ -310,14 +326,14 @@ async function syncDatabaseSchemaOnStartup() {
         noteWhatsMeowTablesFromWuzAPI: 'WhatsMeow data is read from WuzAPI database only, not created locally'
     });
     if (mode === 'migrate' && await shouldBaselineExistingDatabase()) {
-        resolveExistingMigrationsAsApplied(schemaFile);
+        await resolveExistingMigrationsAsApplied(schemaFile);
     }
     if (mode === 'migrate' && await hasFailedMigration('20260428000001_optimize_chatsinfo_view')) {
         logger.warn('Detected failed chatsinfo optimization migration before deploy; applying recovery path', {
             migration: '20260428000001_optimize_chatsinfo_view',
         });
         await ensureChatsInfoView();
-        resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
+        await resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
         logger.info('Recovered failed chatsinfo optimization migration before deploy');
     }
     logger.info('Running DB schema sync on startup', { mode, command });
@@ -338,7 +354,7 @@ async function syncDatabaseSchemaOnStartup() {
                 migration: '20260428000001_optimize_chatsinfo_view',
             });
             await ensureChatsInfoView();
-            resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
+            await resolveMigrationAsApplied('20260428000001_optimize_chatsinfo_view', schemaFile);
             logger.info('Recovered failed chatsinfo optimization migration');
         }
         else {
@@ -378,6 +394,17 @@ LEFT JOIN (
     INNER JOIN "chatTags" ON "chatTags"."tagId" = tags_1."tagId"
     GROUP BY "chatTags"."chatId"
 ) tags ON tags."chatId"::text = chats.id::text;
+    // If Prisma already recorded the migration as applied, there is nothing to resolve.
+    // This avoids triggering P3008 on repeat startups or after partial recovery.
+    if (migrationName === '20260428000001_optimize_chatsinfo_view') {
+        void hasAppliedMigration(migrationName).then((alreadyApplied) => {
+            if (alreadyApplied) {
+                logger.info('Migration already recorded as applied; skipping resolve', {
+                    migration: migrationName,
+                });
+            }
+        });
+    }
 `;
     logger.info('Ensuring chatsinfo view exists and is up to date');
     await DBConnection_1.default.query(sql);
