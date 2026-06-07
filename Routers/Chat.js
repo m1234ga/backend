@@ -1195,6 +1195,17 @@ router.post('/api/AssignTagToChat', async (req, res) => {
                 creationDate: nowTimestamp()
             }
         });
+        // Write audit log
+        try {
+            const tagInfo = await prismaClient_1.default.tags.findUnique({ where: { tagId: BigInt(tagId) } });
+            await prismaClient_1.default.$executeRawUnsafe(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value, created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+      `, createdBy, 'TAG_ASSIGNED', 'chat', chatId, tagInfo?.tagName || tagId.toString());
+        }
+        catch (auditErr) {
+            console.error('Audit log error:', auditErr);
+        }
         res.status(201).json({
             ...newAssignment,
             tagId: newAssignment.tagId.toString(),
@@ -1210,12 +1221,31 @@ router.post('/api/AssignTagToChat', async (req, res) => {
 router.delete('/api/RemoveTagFromChat/:chatId/:tagId', async (req, res) => {
     try {
         const { chatId, tagId } = req.params;
+        const removedBy = String(req.user?.username || req.user?.userId || 'system');
+        // Get tag name before deleting for audit log
+        let tagName = tagId;
+        try {
+            const tagInfo = await prismaClient_1.default.tags.findUnique({ where: { tagId: BigInt(tagId) } });
+            if (tagInfo?.tagName)
+                tagName = tagInfo.tagName;
+        }
+        catch (_) { }
         await prismaClient_1.default.chatTags.deleteMany({
             where: {
                 chatId: chatId,
                 tagId: BigInt(tagId)
             }
         });
+        // Write audit log
+        try {
+            await prismaClient_1.default.$executeRawUnsafe(`
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, old_value, created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+      `, removedBy, 'TAG_REMOVED', 'chat', chatId, tagName);
+        }
+        catch (auditErr) {
+            console.error('Audit log error:', auditErr);
+        }
         res.json({ message: 'Tag removed from chat successfully' });
     }
     catch (error) {
