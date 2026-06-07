@@ -191,7 +191,11 @@ SELECT
     json_build_object(
       'tagId', t."tagId"::text,
       'tagName', COALESCE(NULLIF(t."tagName", ''), '[Unnamed Tag]'),
-      'createdBy', ct."createdBy",
+      'createdBy', COALESCE(
+        NULLIF(CONCAT_WS(' ', au.first_name, au.last_name), ''),
+        au.username,
+        ct."createdBy"
+      ),
       'creationDate', ct."creationDate"
     )
     ORDER BY ct."creationDate" DESC NULLS LAST
@@ -199,6 +203,7 @@ SELECT
       FROM "chatTags" ct
       INNER JOIN tags t ON t."tagId" = ct."tagId"
       INNER JOIN chats c ON c.id = ct."chatId"
+      LEFT JOIN app_users au ON au.username = ct."createdBy" OR au.id::text = ct."createdBy"
       WHERE ($1::boolean = false OR ct."createdBy" = ANY($2::text[]))
       AND ($3::date IS NULL OR ct."creationDate" >= $3::date)
       GROUP BY c.id, c.pushname, c."contactId", c.status, c."lastMessageTime"
